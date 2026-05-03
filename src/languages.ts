@@ -8,9 +8,6 @@ import tsGrammars from "tree-sitter-typescript";
 
 const { typescript, tsx } = tsGrammars;
 
-// arbid's own package root, where node_modules lives.
-const PKG_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
-
 export interface LoadedLang {
   name: string;
   language: Language;
@@ -18,62 +15,51 @@ export interface LoadedLang {
   extensions: string[];
 }
 
-function loadQuery(lang: Language, pkgName: string, tagPaths: string[]): Query {
+function readTags(pkgName: string, tagPaths: string[]): string {
   let combined = "";
   for (const tagPath of tagPaths) {
-    let fullPath = path.resolve(PKG_ROOT, "node_modules", pkgName, tagPath);
-    if (!fs.existsSync(fullPath)) {
-      fullPath = path.resolve(PKG_ROOT, tagPath);
-    }
-    if (fs.existsSync(fullPath)) {
-      combined += fs.readFileSync(fullPath, "utf-8") + "\n";
-    }
+    const specifier = `${pkgName}/${tagPath}`;
+    const resolved = import.meta.resolve(specifier);
+    combined += fs.readFileSync(new URL(resolved), "utf-8") + "\n";
   }
-  // Strip unsupported predicates (tree-sitter 0.21 compat).
-  combined = combined.replace(/^.*#strip!.*\n?/gm, "").replace(/^.*#select-adjacent!.*\n?/gm, "");
-  return new Query(lang, combined);
+  return combined.replace(/^.*#strip!.*\n?/gm, "").replace(/^.*#select-adjacent!.*\n?/gm, "");
 }
 
-const byExtension = new Map<string, LoadedLang>();
+export const byExtension = new Map<string, LoadedLang>();
 
-function register(
-  name: string,
-  language: Language,
-  pkgName: string,
-  tagPaths: string[],
-  extensions: string[],
-) {
-  const query = loadQuery(language, pkgName, tagPaths);
-  const loaded: LoadedLang = { name, language, query, extensions };
-  byExtension.set(name, loaded);
-  for (const ext of extensions) byExtension.set(ext, loaded);
+for (const cfg of [
+  {
+    name: "python",
+    lang: python,
+    pkg: "tree-sitter-python",
+    tags: ["queries/tags.scm"],
+    exts: [".py"],
+  },
+  { name: "rust", lang: rust, pkg: "tree-sitter-rust", tags: ["queries/tags.scm"], exts: [".rs"] },
+  {
+    name: "typescript",
+    lang: typescript,
+    pkg: "tree-sitter-typescript",
+    tags: ["queries/tags.scm", "node_modules/tree-sitter-javascript/queries/tags.scm"],
+    exts: [".ts"],
+  },
+  {
+    name: "tsx",
+    lang: tsx,
+    pkg: "tree-sitter-typescript",
+    tags: ["queries/tags.scm", "node_modules/tree-sitter-javascript/queries/tags.scm"],
+    exts: [".tsx"],
+  },
+]) {
+  const loaded: LoadedLang = {
+    name: cfg.name,
+    language: cfg.lang,
+    query: new Query(cfg.lang, readTags(cfg.pkg, cfg.tags)),
+    extensions: cfg.exts,
+  };
+  for (const ext of cfg.exts) byExtension.set(ext, loaded);
 }
 
-register("python", python, "tree-sitter-python", ["queries/tags.scm"], [".py"]);
-register("rust", rust, "tree-sitter-rust", ["queries/tags.scm"], [".rs"]);
-register(
-  "typescript",
-  typescript,
-  "tree-sitter-typescript",
-  ["queries/tags.scm", "node_modules/tree-sitter-javascript/queries/tags.scm"],
-  [".ts"],
-);
-register(
-  "tsx",
-  tsx,
-  "tree-sitter-typescript",
-  ["queries/tags.scm", "node_modules/tree-sitter-javascript/queries/tags.scm"],
-  [".tsx"],
-);
-
-export function discoverGrammars(): Map<string, LoadedLang> {
-  return byExtension;
-}
-
-export function getLanguageForFile(
-  filePath: string,
-  byExt: Map<string, LoadedLang>,
-): LoadedLang | null {
-  const ext = path.extname(filePath).toLowerCase();
-  return byExt.get(ext) ?? null;
+export function getLanguageForFile(filePath: string): LoadedLang | null {
+  return byExtension.get(path.extname(filePath).toLowerCase()) ?? null;
 }

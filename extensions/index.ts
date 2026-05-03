@@ -3,8 +3,7 @@ import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import chokidar, { type FSWatcher } from "chokidar";
-import { discoverGrammars } from "../src/languages.js";
-import type { LoadedLang } from "../src/languages.js";
+import { byExtension } from "../src/languages.js";
 import { indexProject, reindexFile, removeFile, clearTreeCache } from "../src/indexer.js";
 import {
   findDefinition,
@@ -17,15 +16,11 @@ import {
 
 export default function (pi: ExtensionAPI) {
   let watcher: FSWatcher | null = null;
-  let byExtension: Map<string, LoadedLang> | null = null;
 
   pi.on("session_start", async (_event, ctx) => {
-    // Discover installed tree-sitter grammars from arbid's node_modules.
-    byExtension = discoverGrammars();
-
     openDb();
     try {
-      const result = indexProject(ctx.cwd, byExtension);
+      const result = indexProject(ctx.cwd);
       ctx.ui.notify(
         `arbid: indexed ${result.files} files, ${result.symbols} symbols, ${result.calls} calls (${result.langs.join(", ") || "none"})`,
         "info",
@@ -40,11 +35,11 @@ export default function (pi: ExtensionAPI) {
     const relPath = (p: string) => path.relative(ctx.cwd, p);
 
     watcher.on("add", (filePath: string) => {
-      if (byExtension) reindexFile(relPath(filePath), byExtension);
+      reindexFile(relPath(filePath));
     });
 
     watcher.on("change", (filePath: string) => {
-      if (byExtension) reindexFile(relPath(filePath), byExtension);
+      reindexFile(relPath(filePath));
     });
 
     watcher.on("unlink", (filePath: string) => {
@@ -57,7 +52,6 @@ export default function (pi: ExtensionAPI) {
       watcher.close();
       watcher = null;
     }
-    byExtension = null;
     clearTreeCache();
     closeDb();
   });

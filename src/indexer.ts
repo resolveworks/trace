@@ -1,16 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import Parser, { type SyntaxNode, type Tree } from "tree-sitter";
-import { getLanguageForFile, type LoadedLang } from "./languages.js";
+import { getLanguageForFile, byExtension, type LoadedLang } from "./languages.js";
 import { openDb, clearAll, deleteByFile, insertSymbol, insertCall } from "./db.js";
 
 const parser = new Parser();
 const treeCache = new Map<string, Tree>();
 
-export function indexProject(
-  rootDir: string,
-  byExtension: Map<string, LoadedLang>,
-): {
+export function indexProject(rootDir: string): {
   files: number;
   symbols: number;
   calls: number;
@@ -19,13 +16,13 @@ export function indexProject(
   openDb();
   clearAll();
 
-  const files = collectFiles(rootDir, byExtension, rootDir);
+  const files = collectFiles(rootDir, rootDir);
   let totalSymbols = 0;
   let totalCalls = 0;
   const langs = new Set<string>();
 
   for (const file of files) {
-    const lang = getLanguageForFile(file, byExtension);
+    const lang = getLanguageForFile(file);
     if (!lang) continue;
     langs.add(lang.name);
 
@@ -138,11 +135,7 @@ function findEnclosingDef(line: number, defs: ExtractedDef[]): ExtractedDef | nu
   return best;
 }
 
-function collectFiles(
-  dir: string,
-  byExtension: Map<string, LoadedLang>,
-  rootDir: string,
-): string[] {
+function collectFiles(dir: string, rootDir: string): string[] {
   const results: string[] = [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
 
@@ -150,7 +143,7 @@ function collectFiles(
     const fullPath = path.join(dir, entry.name);
 
     if (entry.isDirectory()) {
-      results.push(...collectFiles(fullPath, byExtension, rootDir));
+      results.push(...collectFiles(fullPath, rootDir));
     } else if (entry.isFile() && byExtension.has(path.extname(entry.name).toLowerCase())) {
       results.push(path.relative(rootDir, fullPath));
     }
@@ -163,8 +156,8 @@ function collectFiles(
  * Re-index a single file, replacing any existing entries for it.
  * Uses tree-sitter incremental parsing when a previous tree is cached.
  */
-export function reindexFile(filePath: string, byExtension: Map<string, LoadedLang>): void {
-  const lang = getLanguageForFile(filePath, byExtension);
+export function reindexFile(filePath: string): void {
+  const lang = getLanguageForFile(filePath);
   if (!lang) return;
 
   try {
