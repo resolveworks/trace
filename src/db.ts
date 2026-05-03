@@ -137,16 +137,46 @@ export function findCallers(name: string): CallSite[] {
   }));
 }
 
-export function getOutline(
-  file: string,
-): { name: string; kind: string; start_line: number; end_line: number }[] {
+export interface OutlineSymbol {
+  name: string;
+  kind: string;
+  start_line: number;
+  end_line: number;
+}
+
+export function getOutline(file: string): OutlineSymbol[] {
   if (!db) return [];
   const rows = db
     .prepare(
-      "SELECT name, kind, start_line, end_line FROM symbols WHERE file = ? ORDER BY start_line",
+      "SELECT name, kind, start_line, end_line FROM symbols WHERE file = ? AND name != '(file)' ORDER BY start_line",
     )
     .all(file) as Record<string, unknown>[];
   return rows.map((r) => ({
+    name: r.name as string,
+    kind: r.kind as string,
+    start_line: r.start_line as number,
+    end_line: r.end_line as number,
+  }));
+}
+
+export interface DirSymbol extends OutlineSymbol {
+  file: string;
+}
+
+/** List all symbols from indexed files under a directory prefix. */
+export function getDirOutline(dir: string): DirSymbol[] {
+  if (!db) return [];
+  const prefix = dir ? `${dir}/` : "";
+  const rows = db
+    .prepare(
+      `SELECT file, name, kind, start_line, end_line
+       FROM symbols
+       WHERE name != '(file)' AND file LIKE ?
+       ORDER BY file, start_line`,
+    )
+    .all(`${prefix}%`) as Record<string, unknown>[];
+  return rows.map((r) => ({
+    file: r.file as string,
     name: r.name as string,
     kind: r.kind as string,
     start_line: r.start_line as number,

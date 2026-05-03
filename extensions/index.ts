@@ -1,9 +1,17 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import chokidar, { type FSWatcher } from "chokidar";
 import { indexProject, reindexFile, removeFile, clearTreeCache } from "../src/indexer.js";
-import { findDefinition, findCallers, getOutline, closeDb, openDb } from "../src/db.js";
+import {
+  findDefinition,
+  findCallers,
+  getOutline,
+  getDirOutline,
+  closeDb,
+  openDb,
+} from "../src/db.js";
 
 export default function (pi: ExtensionAPI) {
   let watcher: FSWatcher | null = null;
@@ -121,29 +129,65 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // outline(file) — top-level symbols in a file
+  // outline(file) — top-level symbols in a file or directory
   pi.registerTool({
     name: "outline",
     label: "Outline",
     description:
-      "List all top-level symbols in a file — functions, classes, types, interfaces, enums — with their kind and line range, sorted by line. Gives you the file's structure without reading it.",
-    promptSnippet: "List top-level symbols in a file",
+      "List all top-level symbols in a file or directory — functions, classes, types, interfaces, enums — with their kind and line range, sorted by line. Gives you the file's structure without reading it.",
+    promptSnippet: "List top-level symbols in a file or directory",
     promptGuidelines: [
       "Use outline to get a file's symbol structure before reading it. Returns name, kind, and line range for each top-level symbol.",
     ],
     parameters: Type.Object({
       file: Type.String({
-        description: "Path to the file (relative to project root)",
+        description: "Path to the file or directory (relative to project root, or absolute)",
       }),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const results = getOutline(params.file);
+      const resolved = path.resolve(_ctx.cwd, params.file);
+      const relPath = path.relative(_ctx.cwd, resolved);
+
+      const isDir =
+        (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) || relPath === "";
+
+      if (isDir) {
+        const results = getDirOutline(relPath);
+        if (results.length === 0) {
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `No symbols found under "${params.file}" (directory not indexed or empty)`,
+              },
+            ],
+            details: {} as Record<string, never>,
+          };
+        }
+
+        // Group by file, with file headers
+        const lines: string[] = [];
+        let currentFile = "";
+        for (const s of results) {
+          if (s.file !== currentFile) {
+            currentFile = s.file;
+            lines.push(`${currentFile}:`);
+          }
+          lines.push(`  ${s.name} (${s.kind}) — lines ${s.start_line}-${s.end_line}`);
+        }
+        return {
+          content: [{ type: "text" as const, text: lines.join("\n") }],
+          details: { symbols: results },
+        };
+      }
+
+      const results = getOutline(relPath);
       if (results.length === 0) {
         return {
           content: [
             {
               type: "text" as const,
-              text: `No symbols found in "${params.file}" (file not indexed or empty)`,
+              text: `No symbols found in "${params.file}" (not indexed or not a file)`,
             },
           ],
           details: {} as Record<string, never>,
