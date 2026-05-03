@@ -21,8 +21,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     // Discover installed tree-sitter grammars from arbid's node_modules.
-    const { byExtension: extMap } = discoverGrammars();
-    byExtension = extMap;
+    byExtension = discoverGrammars();
 
     openDb();
     try {

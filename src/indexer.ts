@@ -65,19 +65,25 @@ function extractFromTree(
   file: string,
   lang: LoadedLang,
 ): { symbols: number; callCount: number } {
-  const matches = lang.query.matches(root);
-
-  // First pass: collect all definitions.
-  // Native tags.scm convention: @definition.X marks the node, @name marks the identifier.
+  // Native tags.scm convention: @definition.X marks a definition node, @reference.X marks a
+  // reference node, @name marks the identifier. A single match pairs e.g. @definition.function
+  // with @name, or @reference.call with @name.
+  //
+  // We make a single pass over matches: collect definitions immediately, buffer references
+  // for attribution after all defs are known.
   const defMap = new Map<string, ExtractedDef>(); // key: "name|startLine"
+  const refBuffer: { refNode: SyntaxNode; nameNode: SyntaxNode }[] = [];
 
-  for (const match of matches) {
+  for (const match of lang.query.matches(root)) {
     let defNode: SyntaxNode | null = null;
+    let refNode: SyntaxNode | null = null;
     let nameNode: SyntaxNode | null = null;
 
     for (const cap of match.captures) {
       if (cap.name.startsWith("definition.")) {
         defNode = cap.node;
+      } else if (cap.name.startsWith("reference.")) {
+        refNode = cap.node;
       } else if (cap.name === "name") {
         nameNode = cap.node;
       }
@@ -95,44 +101,22 @@ function extractFromTree(
         const dbId = insertSymbol(name, kind, file, startLine, endLine, body);
         defMap.set(key, { dbId, name, kind, startLine, endLine });
       }
+    } else if (refNode && nameNode) {
+      refBuffer.push({ refNode, nameNode });
     }
   }
 
-  // Second pass: collect reference sites.
-  // Native tags.scm convention: @reference.X marks the reference, @name marks the target.
+  // Attribute each buffered reference to its nearest enclosing definition,
+  // or leave caller_id NULL for file-level references.
   let callCount = 0;
-  const defs = [...defMap.values()];
-
-  // Synthetic file-level symbol for references not inside any named definition.
-  const fileSymbol: ExtractedDef = {
-    dbId: insertSymbol("(file)", "file", file, 1, root.endPosition.row + 1, ""),
-    name: "(file)",
-    kind: "file",
-    startLine: 1,
-    endLine: root.endPosition.row + 1,
-  };
-
-  for (const match of matches) {
-    let refNode: SyntaxNode | null = null;
-    let nameNode: SyntaxNode | null = null;
-
-    for (const cap of match.captures) {
-      if (cap.name.startsWith("reference.")) {
-        refNode = cap.node;
-      } else if (cap.name === "name") {
-        nameNode = cap.node;
-      }
-    }
-
-    if (refNode && nameNode) {
+  if (refBuffer.length > 0) {
+    const defs = [...defMap.values()];
+    for (const { refNode, nameNode } of refBuffer) {
       const calleeName = nameNode.text;
       const line = refNode.startPosition.row + 1;
-
-      const parent = findEnclosingDef(refNode.startPosition.row + 1, defs) ?? fileSymbol;
-      if (parent) {
-        insertCall(parent.dbId, calleeName, file, line);
-        callCount++;
-      }
+      const parent = findEnclosingDef(refNode.startPosition.row + 1, defs);
+      insertCall(parent?.dbId ?? null, calleeName, file, line);
+      callCount++;
     }
   }
 

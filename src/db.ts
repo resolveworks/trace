@@ -12,8 +12,8 @@ export interface Symbol {
 }
 
 export interface CallSite {
-  caller_name: string;
-  caller_kind: string;
+  caller_name: string | null;
+  caller_kind: string | null;
   callee_name: string;
   file: string;
   line: number;
@@ -50,7 +50,7 @@ function createSchema(db: DatabaseType): void {
 
     CREATE TABLE IF NOT EXISTS calls (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      caller_id INTEGER NOT NULL,
+      caller_id INTEGER,
       callee_name TEXT NOT NULL,
       file TEXT NOT NULL,
       line INTEGER NOT NULL,
@@ -91,7 +91,12 @@ export function insertSymbol(
   return Number(result.lastInsertRowid);
 }
 
-export function insertCall(callerId: number, calleeName: string, file: string, line: number): void {
+export function insertCall(
+  callerId: number | null,
+  calleeName: string,
+  file: string,
+  line: number,
+): void {
   if (!db) throw new Error("Database not open");
   const stmt = db.prepare(
     "INSERT INTO calls (caller_id, callee_name, file, line) VALUES (?, ?, ?, ?)",
@@ -123,14 +128,14 @@ export function findCallers(name: string): CallSite[] {
     .prepare(
       `SELECT s.name AS caller_name, s.kind AS caller_kind, c.callee_name, c.file, c.line
        FROM calls c
-       JOIN symbols s ON c.caller_id = s.id
+       LEFT JOIN symbols s ON c.caller_id = s.id
        WHERE c.callee_name = ?
        ORDER BY LENGTH(c.file) ASC, c.line ASC`,
     )
     .all(name) as Record<string, unknown>[];
   return rows.map((r) => ({
-    caller_name: r.caller_name as string,
-    caller_kind: r.caller_kind as string,
+    caller_name: (r.caller_name as string) ?? null,
+    caller_kind: (r.caller_kind as string) ?? null,
     callee_name: r.callee_name as string,
     file: r.file as string,
     line: r.line as number,
@@ -148,7 +153,7 @@ export function getOutline(file: string): OutlineSymbol[] {
   if (!db) return [];
   const rows = db
     .prepare(
-      "SELECT name, kind, start_line, end_line FROM symbols WHERE file = ? AND name != '(file)' ORDER BY start_line",
+      "SELECT name, kind, start_line, end_line FROM symbols WHERE file = ? ORDER BY start_line",
     )
     .all(file) as Record<string, unknown>[];
   return rows.map((r) => ({
@@ -171,10 +176,10 @@ export function getDirOutline(dir: string): DirSymbol[] {
     .prepare(
       `SELECT file, name, kind, start_line, end_line
        FROM symbols
-       WHERE name != '(file)' AND file LIKE ?
+       WHERE file LIKE (? || '%')
        ORDER BY file, start_line`,
     )
-    .all(`${prefix}%`) as Record<string, unknown>[];
+    .all(prefix) as Record<string, unknown>[];
   return rows.map((r) => ({
     file: r.file as string,
     name: r.name as string,
