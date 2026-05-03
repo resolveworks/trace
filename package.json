@@ -17,13 +17,18 @@
     "tree-sitter-typescript": "^0.23.0"
   },
   "devDependencies": {
+    "@mariozechner/pi-coding-agent": "^0.72.1",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.6.0",
     "husky": "^9.1.7",
     "prettier": "^3.8.3",
     "tree-sitter-javascript": "^0.23.0",
+    "typebox": "^1.1.37",
     "typescript": "^5.0.0"
   },
   "scripts": {
     "test": "npx tsx tests/test.ts",
+    "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepare": "husky"

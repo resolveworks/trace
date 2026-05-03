@@ -101,7 +101,6 @@ function loadLanguage(langName: string): LoadedLang | null {
 
   try {
     // Dynamic import of the tree-sitter grammar package
-    // @ts-expect-error dynamic require
     const pkg = _require(pkgName) as Record<string, unknown>;
 
     // Look for the language export (usually pkg.<langname> or pkg.default)

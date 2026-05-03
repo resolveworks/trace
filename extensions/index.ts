@@ -40,18 +40,18 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       name: Type.String({ description: "Name of the symbol to look up" }),
     }),
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const result = findDefinition(params.name);
       if (!result) {
         return {
-          content: [{ type: "text", text: `No definition found for "${params.name}"` }],
-          details: {},
+          content: [{ type: "text" as const, text: `No definition found for "${params.name}"` }],
+          details: {} as Record<string, never>,
         };
       }
       return {
         content: [
           {
-            type: "text",
+            type: "text" as const,
             text: [
               `${result.name} (${result.kind}) — ${result.file}:${result.start_line}-${result.end_line}`,
               "",
@@ -83,19 +83,19 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       name: Type.String({ description: "Name of the function or method" }),
     }),
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const results = findCallers(params.name);
       if (results.length === 0) {
         return {
-          content: [{ type: "text", text: `No callers found for "${params.name}"` }],
-          details: {},
+          content: [{ type: "text" as const, text: `No callers found for "${params.name}"` }],
+          details: {} as Record<string, never>,
         };
       }
       const lines = results.map(
         (c) => `${c.file}:${c.line} — called in ${c.caller_name} (${c.caller_kind})`,
       );
       return {
-        content: [{ type: "text", text: lines.join("\n") }],
+        content: [{ type: "text" as const, text: lines.join("\n") }],
         details: { callers: results },
       };
     },
@@ -116,24 +116,24 @@ export default function (pi: ExtensionAPI) {
         description: "Path to the file (relative to project root)",
       }),
     }),
-    async execute(_toolCallId, params) {
+    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const results = getOutline(params.file);
       if (results.length === 0) {
         return {
           content: [
             {
-              type: "text",
+              type: "text" as const,
               text: `No symbols found in "${params.file}" (file not indexed or empty)`,
             },
           ],
-          details: {},
+          details: {} as Record<string, never>,
         };
       }
       const lines = results.map(
         (s) => `${s.name} (${s.kind}) — lines ${s.start_line}-${s.end_line}`,
       );
       return {
-        content: [{ type: "text", text: lines.join("\n") }],
+        content: [{ type: "text" as const, text: lines.join("\n") }],
         details: { symbols: results },
       };
     },
