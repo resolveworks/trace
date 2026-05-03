@@ -2,10 +2,14 @@
   "name": "arbid",
   "version": "0.0.0",
   "description": "Deterministic code exploration primitives for Pi — tree-sitter + SQLite tools for finding callers, definitions, and file outlines",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "type": "module",
   "pi": {
-    "extensions": ["./extensions"]
+    "extensions": [
+      "./extensions"
+    ]
   },
   "dependencies": {
     "better-sqlite3": "^11.0.0",
@@ -13,10 +17,15 @@
     "tree-sitter-typescript": "^0.23.0"
   },
   "devDependencies": {
+    "husky": "^9.1.7",
+    "prettier": "^3.8.3",
     "tree-sitter-javascript": "^0.23.0",
     "typescript": "^5.0.0"
   },
   "scripts": {
-    "test": "npx tsx tests/test.ts"
+    "test": "npx tsx tests/test.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "husky"
   }
 }

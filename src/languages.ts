@@ -90,10 +90,7 @@ export interface LoadedLang {
 }
 
 const loaded: Map<string, LoadedLang> = new Map();
-const queriesDir = path.resolve(
-  path.dirname(new URL(import.meta.url).pathname),
-  "queries",
-);
+const queriesDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "queries");
 
 function loadLanguage(langName: string): LoadedLang | null {
   const cached = loaded.get(langName);
@@ -112,7 +109,8 @@ function loadLanguage(langName: string): LoadedLang | null {
     if (langName === "typescript" || langName === "javascript") {
       // tree-sitter-typescript exports { typescript, tsx }
       // tree-sitter-javascript exports { default }
-      lang = (pkg as { typescript?: Language }).typescript ?? (pkg as { default?: Language }).default;
+      lang =
+        (pkg as { typescript?: Language }).typescript ?? (pkg as { default?: Language }).default;
     } else if (langName === "ocaml") {
       lang = (pkg as { ocaml: Language }).ocaml;
     } else {

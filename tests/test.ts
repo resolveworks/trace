@@ -63,7 +63,10 @@ const outline = getOutline(path.join(ARBID_ROOT, "extensions/index.ts"));
 assert(outline.length > 0, "getOutline('extensions/index.ts') returns symbols");
 if (outline.length > 0) {
   assert(outline[0].start_line > 0, "first symbol has start_line > 0");
-  assert(outline.every((s) => s.start_line > 0), "all symbols have valid line ranges");
+  assert(
+    outline.every((s) => s.start_line > 0),
+    "all symbols have valid line ranges",
+  );
 }
 
 const outlineNone = getOutline("nonexistent/file.ts");

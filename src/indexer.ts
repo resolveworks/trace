@@ -2,16 +2,16 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import Parser, { type SyntaxNode } from "tree-sitter";
 import { getLanguageForFile, getSupportedExtensions } from "./languages.js";
-import {
-  openDb,
-  clearAll,
-  insertSymbol,
-  insertCall,
-} from "./db.js";
+import { openDb, clearAll, insertSymbol, insertCall } from "./db.js";
 
 const parser = new Parser();
 
-export function indexProject(rootDir: string): { files: number; symbols: number; calls: number; langs: string[] } {
+export function indexProject(rootDir: string): {
+  files: number;
+  symbols: number;
+  calls: number;
+  langs: string[];
+} {
   openDb();
   clearAll();
 
@@ -35,7 +35,12 @@ export function indexProject(rootDir: string): { files: number; symbols: number;
     totalCalls += callCount;
   }
 
-  return { files: files.length, symbols: totalSymbols, calls: totalCalls, langs: [...langs].sort() };
+  return {
+    files: files.length,
+    symbols: totalSymbols,
+    calls: totalCalls,
+    langs: [...langs].sort(),
+  };
 }
 
 interface ExtractedDef {
@@ -91,7 +96,14 @@ function extractFromTree(
 
   // Add a synthetic file-level symbol for calls not inside any named definition
   const fileSymbol: ExtractedDef = {
-    dbId: insertSymbol(`<file> ${path.basename(file)}`, "(file-level)", file, 1, root.endPosition.row + 1, ""),
+    dbId: insertSymbol(
+      `<file> ${path.basename(file)}`,
+      "(file-level)",
+      file,
+      1,
+      root.endPosition.row + 1,
+      "",
+    ),
     name: `(file) ${path.basename(file)}`,
     kind: "file",
     startLine: 1,
@@ -126,10 +138,7 @@ function extractFromTree(
   return { symbols: defMap.size, callCount };
 }
 
-function findEnclosingDef(
-  line: number,
-  defs: ExtractedDef[],
-): ExtractedDef | null {
+function findEnclosingDef(line: number, defs: ExtractedDef[]): ExtractedDef | null {
   let best: ExtractedDef | null = null;
   let bestSize = Infinity;
   for (const d of defs) {

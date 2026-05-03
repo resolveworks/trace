@@ -134,10 +134,14 @@ export function findCallers(name: string): CallSite[] {
   }));
 }
 
-export function getOutline(file: string): { name: string; kind: string; start_line: number; end_line: number }[] {
+export function getOutline(
+  file: string,
+): { name: string; kind: string; start_line: number; end_line: number }[] {
   if (!db) return [];
   const rows = db
-    .prepare("SELECT name, kind, start_line, end_line FROM symbols WHERE file = ? ORDER BY start_line")
+    .prepare(
+      "SELECT name, kind, start_line, end_line FROM symbols WHERE file = ? ORDER BY start_line",
+    )
     .all(file) as Record<string, unknown>[];
   return rows.map((r) => ({
     name: r.name as string,
