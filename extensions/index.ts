@@ -121,9 +121,10 @@ export default function (pi: ExtensionAPI) {
           details: {} as Record<string, never>,
         };
       }
-      const lines = results.map(
-        (c) => `${c.file}:${c.line} — called in ${c.caller_name} (${c.caller_kind})`,
-      );
+      const lines = results.map((c) => {
+        const scope = c.caller_name ? `${c.caller_name} (${c.caller_kind})` : "(top-level)";
+        return `${c.file}:${c.line} — called in ${scope}`;
+      });
       return {
         content: [{ type: "text" as const, text: lines.join("\n") }],
         details: { callers: results },
