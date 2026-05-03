@@ -1,0 +1,5 @@
+# Vendored from Aider (Apache 2.0)
+# https://github.com/Aider-AI/aider/tree/main/aider/queries/tree-sitter-languages
+#
+# These tree-sitter tag query files define symbol definitions and references
+# for each language. They are used verbatim.
