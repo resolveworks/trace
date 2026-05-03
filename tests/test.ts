@@ -58,7 +58,7 @@ assert(csNone.length === 0, "findCallers('nonexistent') returns empty array");
 
 // --- outline ---
 console.log("\noutline tests:");
-const outline = getOutline(path.join(ARBID_ROOT, "extensions/index.ts"));
+const outline = getOutline("extensions/index.ts");
 assert(outline.length > 0, "getOutline('extensions/index.ts') returns symbols");
 if (outline.length > 0) {
   assert(outline[0].start_line > 0, "first symbol has start_line > 0");

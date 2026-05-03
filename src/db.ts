@@ -51,7 +51,6 @@ function createSchema(db: DatabaseType): void {
     CREATE TABLE IF NOT EXISTS calls (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       caller_id INTEGER NOT NULL,
-      caller_name TEXT NOT NULL,
       callee_name TEXT NOT NULL,
       file TEXT NOT NULL,
       line INTEGER NOT NULL,
@@ -92,18 +91,12 @@ export function insertSymbol(
   return Number(result.lastInsertRowid);
 }
 
-export function insertCall(
-  callerId: number,
-  callerName: string,
-  calleeName: string,
-  file: string,
-  line: number,
-): void {
+export function insertCall(callerId: number, calleeName: string, file: string, line: number): void {
   if (!db) throw new Error("Database not open");
   const stmt = db.prepare(
-    "INSERT INTO calls (caller_id, caller_name, callee_name, file, line) VALUES (?, ?, ?, ?, ?)",
+    "INSERT INTO calls (caller_id, callee_name, file, line) VALUES (?, ?, ?, ?)",
   );
-  stmt.run(callerId, callerName, calleeName, file, line);
+  stmt.run(callerId, calleeName, file, line);
 }
 
 // --- Query functions ---
@@ -127,7 +120,13 @@ export function findDefinition(name: string): Symbol[] {
 export function findCallers(name: string): CallSite[] {
   if (!db) return [];
   const rows = db
-    .prepare("SELECT * FROM calls WHERE callee_name = ? ORDER BY LENGTH(file) ASC, line ASC")
+    .prepare(
+      `SELECT s.name AS caller_name, s.kind AS caller_kind, c.callee_name, c.file, c.line
+       FROM calls c
+       JOIN symbols s ON c.caller_id = s.id
+       WHERE c.callee_name = ?
+       ORDER BY LENGTH(c.file) ASC, c.line ASC`,
+    )
     .all(name) as Record<string, unknown>[];
   return rows.map((r) => ({
     caller_name: r.caller_name as string,

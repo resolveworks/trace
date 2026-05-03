@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import chokidar, { type FSWatcher } from "chokidar";
@@ -26,16 +27,18 @@ export default function (pi: ExtensionAPI) {
       ignoreInitial: true,
     });
 
+    const relPath = (p: string) => path.relative(ctx.cwd, p);
+
     watcher.on("add", (filePath: string) => {
-      reindexFile(filePath);
+      reindexFile(relPath(filePath));
     });
 
     watcher.on("change", (filePath: string) => {
-      reindexFile(filePath);
+      reindexFile(relPath(filePath));
     });
 
     watcher.on("unlink", (filePath: string) => {
-      removeFile(filePath);
+      removeFile(relPath(filePath));
     });
   });
 

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import Parser, { type SyntaxNode, type Tree } from "tree-sitter";
-import { getLanguageForFile, getSupportedExtensions } from "./languages.js";
+import { getLanguageForFile, getSupportedExtensions, type LoadedLang } from "./languages.js";
 import { openDb, clearAll, deleteByFile, insertSymbol, insertCall } from "./db.js";
 
 const parser = new Parser();
@@ -17,7 +17,7 @@ export function indexProject(rootDir: string): {
   clearAll();
 
   const supportedExts = getSupportedExtensions();
-  const files = collectFiles(rootDir, supportedExts);
+  const files = collectFiles(rootDir, supportedExts, rootDir);
   let totalSymbols = 0;
   let totalCalls = 0;
   const langs = new Set<string>();
@@ -61,7 +61,7 @@ function extractFromTree(
   root: SyntaxNode,
   source: string,
   file: string,
-  lang: import("./languages.js").LoadedLang,
+  lang: LoadedLang,
 ): { symbols: number; callCount: number } {
   const matches = lang.query.matches(root);
 
@@ -96,21 +96,14 @@ function extractFromTree(
     }
   }
 
-  // Third pass: collect call references, handling file-level calls
+  // Second pass: collect call references, handling file-level calls
   let callCount = 0;
   const defs = [...defMap.values()];
 
-  // Add a synthetic file-level symbol for calls not inside any named definition
+  // Synthetic file-level symbol for calls not inside any named definition
   const fileSymbol: ExtractedDef = {
-    dbId: insertSymbol(
-      `<file> ${path.basename(file)}`,
-      "(file-level)",
-      file,
-      1,
-      root.endPosition.row + 1,
-      "",
-    ),
-    name: `(file) ${path.basename(file)}`,
+    dbId: insertSymbol("(file)", "file", file, 1, root.endPosition.row + 1, ""),
+    name: "(file)",
     kind: "file",
     startLine: 1,
     endLine: root.endPosition.row + 1,
@@ -135,7 +128,7 @@ function extractFromTree(
       // Find the enclosing definition (innermost def that contains this call)
       const parent = findEnclosingDef(callNode.startPosition.row + 1, defs) ?? fileSymbol;
       if (parent) {
-        insertCall(parent.dbId, parent.name, calleeName, file, line);
+        insertCall(parent.dbId, calleeName, file, line);
         callCount++;
       }
     }
@@ -159,7 +152,7 @@ function findEnclosingDef(line: number, defs: ExtractedDef[]): ExtractedDef | nu
   return best;
 }
 
-function collectFiles(dir: string, supportedExts: Set<string>): string[] {
+function collectFiles(dir: string, supportedExts: Set<string>, rootDir: string): string[] {
   const results: string[] = [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
 
@@ -167,9 +160,9 @@ function collectFiles(dir: string, supportedExts: Set<string>): string[] {
     const fullPath = path.join(dir, entry.name);
 
     if (entry.isDirectory()) {
-      results.push(...collectFiles(fullPath, supportedExts));
+      results.push(...collectFiles(fullPath, supportedExts, rootDir));
     } else if (entry.isFile() && supportedExts.has(path.extname(entry.name).toLowerCase())) {
-      results.push(fullPath);
+      results.push(path.relative(rootDir, fullPath));
     }
   }
 
