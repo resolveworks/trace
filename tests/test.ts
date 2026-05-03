@@ -1,4 +1,5 @@
 import { indexProject } from "../src/indexer.js";
+import { discoverGrammars } from "../src/languages.js";
 import { findDefinition, findCallers, getOutline, closeDb } from "../src/db.js";
 import * as path from "node:path";
 
@@ -17,9 +18,18 @@ function assert(condition: boolean, msg: string): void {
   }
 }
 
+// --- Discover grammars ---
+console.log("Discovering grammars...");
+const { byName, byExtension } = discoverGrammars();
+const langNames = [...byName.keys()];
+console.log(`  Found ${byName.size} grammars: ${langNames.join(", ") || "none"}`);
+assert(byName.size > 0, "at least one grammar discovered");
+assert(byName.has("typescript"), "typescript grammar discovered");
+assert(byExtension.has(".ts"), ".ts extension mapped");
+
 // --- Index ---
-console.log("Indexing arbid source...");
-const result = indexProject(ARBID_ROOT);
+console.log("\nIndexing arbid source...");
+const result = indexProject(ARBID_ROOT, byExtension);
 console.log(`  Indexed ${result.files} files, ${result.symbols} symbols, ${result.calls} calls`);
 console.log(`  Languages: ${result.langs.join(", ")}`);
 

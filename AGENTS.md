@@ -14,7 +14,7 @@ All tools output plain text. `def` includes the body inline; `callers` and `outl
 
 - **tree-sitter** for parsing (syntax trees, not semantics — no LSP, no type resolution)
 - **SQLite** for storage (symbols table + calls table; graph queries are just JOINs)
-- **No index staleness** — re-index on startup, add file watching later if needed
+- **No index staleness** — re-index on startup, then keep in sync via chokidar file watching (add/change/unlink).
 - **Positions itself as an addition to grep, not a replacement.** The agent uses `def`/`callers`/`outline` for structured navigation and `rg`/`read` for strings and comments.
 
 ## Structure
@@ -26,10 +26,10 @@ arbid/
 ├── extensions/
 │   └── index.ts          # registers def, callers, outline tools
 ├── src/
-│   ├── indexer.ts         # walk repo → parse → extract via queries
-│   ├── languages.ts       # grammar loading + extension mapping
+│   ├── indexer.ts         # walk repo → parse → extract via native tag queries
+│   ├── languages.ts       # grammar auto-discovery from node_modules
 │   ├── db.ts              # SQLite schema + query functions
-│   └── queries/           # vendored Aider .scm files (26 languages)
+│   └── tree-sitter-language.d.ts  # Language type augmentation
 ├── tests/
 │   └── test.ts            # unit tests
 └── tsconfig.json
@@ -47,10 +47,11 @@ The tools appear automatically in Pi's tool list once installed. The model will 
 
 ## Multi-language support
 
-Uses **Aider's tree-sitter tag queries** — 26 languages supported via vendored `.scm` files. Each language activates when its tree-sitter grammar package is installed:
+Grammar auto-discovery at startup via `discoverGrammars()`:
 
-```bash
-cd arbid && npm install tree-sitter-python  # activates Python indexing
-```
+1. Scans `node_modules/tree-sitter-*` directories for `tree-sitter.json` manifests.
+2. Uses each grammar's native **tag capture queries** (`@definition.X`, `@reference.X`, `@name`) from the query files listed in the manifest's `tags` field — no more vendored `.scm` files.
+3. Reads `file-types` from the manifest for extension-to-language mapping.
+4. Resolves the `Language` object by matching `grammar.name` to each exported object's `name` property.
 
-Languages without a grammar installed are silently skipped. Bundled by default: TypeScript.
+Any tree-sitter grammar package with a `tree-sitter.json` manifest is automatically supported. Languages without a grammar installed are silently skipped. Bundled by default: TypeScript.

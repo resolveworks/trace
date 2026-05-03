@@ -1,13 +1,16 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import Parser, { type SyntaxNode, type Tree } from "tree-sitter";
-import { getLanguageForFile, getSupportedExtensions, type LoadedLang } from "./languages.js";
+import { getLanguageForFile, type LoadedLang } from "./languages.js";
 import { openDb, clearAll, deleteByFile, insertSymbol, insertCall } from "./db.js";
 
 const parser = new Parser();
 const treeCache = new Map<string, Tree>();
 
-export function indexProject(rootDir: string): {
+export function indexProject(
+  rootDir: string,
+  byExtension: Map<string, LoadedLang>,
+): {
   files: number;
   symbols: number;
   calls: number;
@@ -16,14 +19,13 @@ export function indexProject(rootDir: string): {
   openDb();
   clearAll();
 
-  const supportedExts = getSupportedExtensions();
-  const files = collectFiles(rootDir, supportedExts, rootDir);
+  const files = collectFiles(rootDir, byExtension, rootDir);
   let totalSymbols = 0;
   let totalCalls = 0;
   const langs = new Set<string>();
 
   for (const file of files) {
-    const lang = getLanguageForFile(file);
+    const lang = getLanguageForFile(file, byExtension);
     if (!lang) continue;
     langs.add(lang.name);
 
@@ -65,7 +67,8 @@ function extractFromTree(
 ): { symbols: number; callCount: number } {
   const matches = lang.query.matches(root);
 
-  // First pass: collect all definitions and their DB IDs
+  // First pass: collect all definitions.
+  // Native tags.scm convention: @definition.X marks the node, @name marks the identifier.
   const defMap = new Map<string, ExtractedDef>(); // key: "name|startLine"
 
   for (const match of matches) {
@@ -75,7 +78,7 @@ function extractFromTree(
     for (const cap of match.captures) {
       if (cap.name.startsWith("definition.")) {
         defNode = cap.node;
-      } else if (cap.name.startsWith("name.definition.")) {
+      } else if (cap.name === "name") {
         nameNode = cap.node;
       }
     }
@@ -87,7 +90,6 @@ function extractFromTree(
       const endLine = defNode.endPosition.row + 1;
       const body = source.slice(defNode.startIndex, defNode.endIndex);
 
-      // Deduplicate: same name at same start line = already seen
       const key = `${name}|${startLine}`;
       if (!defMap.has(key)) {
         const dbId = insertSymbol(name, kind, file, startLine, endLine, body);
@@ -96,11 +98,12 @@ function extractFromTree(
     }
   }
 
-  // Second pass: collect call references, handling file-level calls
+  // Second pass: collect reference sites.
+  // Native tags.scm convention: @reference.X marks the reference, @name marks the target.
   let callCount = 0;
   const defs = [...defMap.values()];
 
-  // Synthetic file-level symbol for calls not inside any named definition
+  // Synthetic file-level symbol for references not inside any named definition.
   const fileSymbol: ExtractedDef = {
     dbId: insertSymbol("(file)", "file", file, 1, root.endPosition.row + 1, ""),
     name: "(file)",
@@ -110,23 +113,22 @@ function extractFromTree(
   };
 
   for (const match of matches) {
-    let callNode: SyntaxNode | null = null;
+    let refNode: SyntaxNode | null = null;
     let nameNode: SyntaxNode | null = null;
 
     for (const cap of match.captures) {
-      if (cap.name === "reference.call") {
-        callNode = cap.node;
-      } else if (cap.name === "name.reference.call") {
+      if (cap.name.startsWith("reference.")) {
+        refNode = cap.node;
+      } else if (cap.name === "name") {
         nameNode = cap.node;
       }
     }
 
-    if (callNode && nameNode) {
+    if (refNode && nameNode) {
       const calleeName = nameNode.text;
-      const line = callNode.startPosition.row + 1;
+      const line = refNode.startPosition.row + 1;
 
-      // Find the enclosing definition (innermost def that contains this call)
-      const parent = findEnclosingDef(callNode.startPosition.row + 1, defs) ?? fileSymbol;
+      const parent = findEnclosingDef(refNode.startPosition.row + 1, defs) ?? fileSymbol;
       if (parent) {
         insertCall(parent.dbId, calleeName, file, line);
         callCount++;
@@ -152,7 +154,11 @@ function findEnclosingDef(line: number, defs: ExtractedDef[]): ExtractedDef | nu
   return best;
 }
 
-function collectFiles(dir: string, supportedExts: Set<string>, rootDir: string): string[] {
+function collectFiles(
+  dir: string,
+  byExtension: Map<string, LoadedLang>,
+  rootDir: string,
+): string[] {
   const results: string[] = [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
 
@@ -160,8 +166,8 @@ function collectFiles(dir: string, supportedExts: Set<string>, rootDir: string):
     const fullPath = path.join(dir, entry.name);
 
     if (entry.isDirectory()) {
-      results.push(...collectFiles(fullPath, supportedExts, rootDir));
-    } else if (entry.isFile() && supportedExts.has(path.extname(entry.name).toLowerCase())) {
+      results.push(...collectFiles(fullPath, byExtension, rootDir));
+    } else if (entry.isFile() && byExtension.has(path.extname(entry.name).toLowerCase())) {
       results.push(path.relative(rootDir, fullPath));
     }
   }
@@ -173,8 +179,8 @@ function collectFiles(dir: string, supportedExts: Set<string>, rootDir: string):
  * Re-index a single file, replacing any existing entries for it.
  * Uses tree-sitter incremental parsing when a previous tree is cached.
  */
-export function reindexFile(filePath: string): void {
-  const lang = getLanguageForFile(filePath);
+export function reindexFile(filePath: string, byExtension: Map<string, LoadedLang>): void {
+  const lang = getLanguageForFile(filePath, byExtension);
   if (!lang) return;
 
   try {
@@ -185,7 +191,6 @@ export function reindexFile(filePath: string): void {
     const tree = parser.parse(source, oldTree);
     treeCache.set(filePath, tree);
 
-    // Delete old entries for this file, then re-extract
     deleteByFile(filePath);
     extractFromTree(tree.rootNode, source, filePath, lang);
   } catch {

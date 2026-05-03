@@ -3,6 +3,8 @@ import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import chokidar, { type FSWatcher } from "chokidar";
+import { discoverGrammars } from "../src/languages.js";
+import type { LoadedLang } from "../src/languages.js";
 import { indexProject, reindexFile, removeFile, clearTreeCache } from "../src/indexer.js";
 import {
   findDefinition,
@@ -15,12 +17,16 @@ import {
 
 export default function (pi: ExtensionAPI) {
   let watcher: FSWatcher | null = null;
+  let byExtension: Map<string, LoadedLang> | null = null;
 
-  // Index the codebase at session start, then keep it in sync via file watching
   pi.on("session_start", async (_event, ctx) => {
+    // Discover installed tree-sitter grammars from arbid's node_modules.
+    const { byExtension: extMap } = discoverGrammars();
+    byExtension = extMap;
+
     openDb();
     try {
-      const result = indexProject(ctx.cwd);
+      const result = indexProject(ctx.cwd, byExtension);
       ctx.ui.notify(
         `arbid: indexed ${result.files} files, ${result.symbols} symbols, ${result.calls} calls (${result.langs.join(", ") || "none"})`,
         "info",
@@ -30,19 +36,16 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    // Start watching for changes
-    watcher = chokidar.watch(ctx.cwd, {
-      ignoreInitial: true,
-    });
+    watcher = chokidar.watch(ctx.cwd, { ignoreInitial: true });
 
     const relPath = (p: string) => path.relative(ctx.cwd, p);
 
     watcher.on("add", (filePath: string) => {
-      reindexFile(relPath(filePath));
+      if (byExtension) reindexFile(relPath(filePath), byExtension);
     });
 
     watcher.on("change", (filePath: string) => {
-      reindexFile(relPath(filePath));
+      if (byExtension) reindexFile(relPath(filePath), byExtension);
     });
 
     watcher.on("unlink", (filePath: string) => {
@@ -50,12 +53,12 @@ export default function (pi: ExtensionAPI) {
     });
   });
 
-  // Clean up on shutdown
   pi.on("session_shutdown", async () => {
     if (watcher) {
       watcher.close();
       watcher = null;
     }
+    byExtension = null;
     clearTreeCache();
     closeDb();
   });
@@ -165,7 +168,6 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        // Group by file, with file headers
         const lines: string[] = [];
         let currentFile = "";
         for (const s of results) {
