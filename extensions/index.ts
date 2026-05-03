@@ -57,10 +57,10 @@ export default function (pi: ExtensionAPI) {
     name: "def",
     label: "Definition",
     description:
-      "Return the full source body of a function, class, method, type, or interface by name. Returns the entire definition as a unit with file path and line range. Use this instead of grep + read when you need to see a symbol's implementation.",
+      "Return the full source body of a function, class, method, type, or interface by name. Returns the entire definition — matched braces/brackets, all inner code — with file path and precise line range. One call gets you the complete implementation.",
     promptSnippet: "Look up a named definition and return its full body",
     promptGuidelines: [
-      "Use def to get a function/class/type's complete body as one unit. Faster than grep then read then slice manually.",
+      "Use def to get a function/class/type's complete body as one unit. Returns the exact code block with matched delimiters and line range.",
     ],
     parameters: Type.Object({
       name: Type.String({ description: "Name of the symbol to look up" }),
@@ -95,10 +95,10 @@ export default function (pi: ExtensionAPI) {
     name: "callers",
     label: "Callers",
     description:
-      "Find every call site for a named function or method. Uses AST traversal so it catches aliased calls, callbacks, and method dispatch that grep misses. Returns file, line, and calling function for each call site.",
+      "Find every call site for a named function or method by analyzing the syntax tree. Returns file, line, and enclosing function for each call. AST-based, so it correctly resolves calls through renames, callbacks, and method dispatch.",
     promptSnippet: "Find where a function or method is called",
     promptGuidelines: [
-      "Use callers to find what calls a function/method. More accurate than grep for aliased calls and callbacks.",
+      "Use callers to find all call sites of a function/method. AST-aware so it catches aliased calls, callbacks, and method dispatch.",
     ],
     parameters: Type.Object({
       name: Type.String({ description: "Name of the function or method" }),
@@ -126,10 +126,10 @@ export default function (pi: ExtensionAPI) {
     name: "outline",
     label: "Outline",
     description:
-      "List all top-level symbols in a file (functions, classes, types, interfaces, enums) without reading the file. Returns name, kind, and line range for each symbol, sorted by line. Use this to orient yourself before reading a file.",
+      "List all top-level symbols in a file — functions, classes, types, interfaces, enums — with their kind and line range, sorted by line. Gives you the file's structure without reading it.",
     promptSnippet: "List top-level symbols in a file",
     promptGuidelines: [
-      "Use outline to see what's in a file before reading it. Faster and cleaner than a grep approximation.",
+      "Use outline to get a file's symbol structure before reading it. Returns name, kind, and line range for each top-level symbol.",
     ],
     parameters: Type.Object({
       file: Type.String({
