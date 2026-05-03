@@ -29,22 +29,21 @@ assert(result.langs.includes("typescript"), "typescript language detected");
 
 // --- def ---
 console.log("\ndef tests:");
-const d = findDefinition("indexProject");
-assert(d !== null, "findDefinition('indexProject') returns non-null");
-if (d) {
-  assert(d.kind === "function_declaration", `kind is function_declaration (got ${d.kind})`);
-  assert(d.file.includes("src/indexer.ts"), `file is src/indexer.ts (got ${d.file})`);
-  assert(d.body.includes("function indexProject"), "body contains function definition");
-  assert(d.start_line > 0, `start_line > 0 (got ${d.start_line})`);
-  assert(d.end_line > d.start_line, `end_line > start_line (${d.end_line} > ${d.start_line})`);
-}
+const defs = findDefinition("indexProject");
+assert(defs.length > 0, "findDefinition('indexProject') returns non-null");
+const d = defs[0];
+assert(d.kind === "function_declaration", `kind is function_declaration (got ${d.kind})`);
+assert(d.file.includes("src/indexer.ts"), `file is src/indexer.ts (got ${d.file})`);
+assert(d.body.includes("function indexProject"), "body contains function definition");
+assert(d.start_line > 0, `start_line > 0 (got ${d.start_line})`);
+assert(d.end_line > d.start_line, `end_line > start_line (${d.end_line} > ${d.start_line})`);
 
-const dNone = findDefinition("nonexistent_symbol_xyz");
-assert(dNone === null, "findDefinition('nonexistent') returns null");
+const noDefs = findDefinition("nonexistent_symbol_xyz");
+assert(noDefs.length === 0, "findDefinition('nonexistent') returns empty array");
 
 // Interface (type_alias_declaration or interface_declaration)
 const dInterface = findDefinition("Symbol");
-assert(dInterface !== null, "findDefinition('Symbol') finds Symbol type/interface");
+assert(dInterface.length > 0, "findDefinition('Symbol') finds Symbol type/interface");
 
 // --- callers ---
 console.log("\ncallers tests:");

@@ -70,6 +70,12 @@ export function clearAll(): void {
   db.exec("DELETE FROM symbols; DELETE FROM calls;");
 }
 
+export function deleteByFile(file: string): void {
+  if (!db) return;
+  db.prepare("DELETE FROM calls WHERE file = ?").run(file);
+  db.prepare("DELETE FROM symbols WHERE file = ?").run(file);
+}
+
 export function insertSymbol(
   name: string,
   kind: string,
@@ -102,13 +108,12 @@ export function insertCall(
 
 // --- Query functions ---
 
-export function findDefinition(name: string): Symbol | null {
-  if (!db) return null;
-  const row = db.prepare("SELECT * FROM symbols WHERE name = ? LIMIT 1").get(name) as
-    | Record<string, unknown>
-    | undefined;
-  if (!row) return null;
-  return {
+export function findDefinition(name: string): Symbol[] {
+  if (!db) return [];
+  const rows = db
+    .prepare("SELECT * FROM symbols WHERE name = ? ORDER BY LENGTH(file) ASC, start_line ASC")
+    .all(name) as Record<string, unknown>[];
+  return rows.map((row) => ({
     id: row.id as number,
     name: row.name as string,
     kind: row.kind as string,
@@ -116,15 +121,14 @@ export function findDefinition(name: string): Symbol | null {
     start_line: row.start_line as number,
     end_line: row.end_line as number,
     body: row.body as string,
-  };
+  }));
 }
 
 export function findCallers(name: string): CallSite[] {
   if (!db) return [];
-  const rows = db.prepare("SELECT * FROM calls WHERE callee_name = ?").all(name) as Record<
-    string,
-    unknown
-  >[];
+  const rows = db
+    .prepare("SELECT * FROM calls WHERE callee_name = ? ORDER BY LENGTH(file) ASC, line ASC")
+    .all(name) as Record<string, unknown>[];
   return rows.map((r) => ({
     caller_name: r.caller_name as string,
     caller_kind: r.caller_kind as string,

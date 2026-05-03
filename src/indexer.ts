@@ -1,10 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import Parser, { type SyntaxNode } from "tree-sitter";
+import Parser, { type SyntaxNode, type Tree } from "tree-sitter";
 import { getLanguageForFile, getSupportedExtensions } from "./languages.js";
-import { openDb, clearAll, insertSymbol, insertCall } from "./db.js";
+import { openDb, clearAll, deleteByFile, insertSymbol, insertCall } from "./db.js";
 
 const parser = new Parser();
+const treeCache = new Map<string, Tree>();
 
 export function indexProject(rootDir: string): {
   files: number;
@@ -26,13 +27,18 @@ export function indexProject(rootDir: string): {
     if (!lang) continue;
     langs.add(lang.name);
 
-    const source = fs.readFileSync(file, "utf-8");
-    parser.setLanguage(lang.language);
-    const tree = parser.parse(source);
+    try {
+      const source = fs.readFileSync(file, "utf-8");
+      parser.setLanguage(lang.language);
+      const tree = parser.parse(source);
+      treeCache.set(file, tree);
 
-    const { symbols, callCount } = extractFromTree(tree.rootNode, source, file, lang);
-    totalSymbols += symbols;
-    totalCalls += callCount;
+      const { symbols, callCount } = extractFromTree(tree.rootNode, source, file, lang);
+      totalSymbols += symbols;
+      totalCalls += callCount;
+    } catch {
+      // skip files that tree-sitter can't parse
+    }
   }
 
   return {
@@ -161,23 +167,46 @@ function collectFiles(dir: string, supportedExts: Set<string>): string[] {
     const fullPath = path.join(dir, entry.name);
 
     if (entry.isDirectory()) {
-      if (
-        !entry.name.startsWith(".") &&
-        entry.name !== "node_modules" &&
-        entry.name !== "dist" &&
-        entry.name !== "build" &&
-        entry.name !== ".git" &&
-        entry.name !== "target" &&
-        entry.name !== "__pycache__" &&
-        entry.name !== ".venv" &&
-        entry.name !== "vendor"
-      ) {
-        results.push(...collectFiles(fullPath, supportedExts));
-      }
+      results.push(...collectFiles(fullPath, supportedExts));
     } else if (entry.isFile() && supportedExts.has(path.extname(entry.name).toLowerCase())) {
       results.push(fullPath);
     }
   }
 
   return results;
+}
+
+/**
+ * Re-index a single file, replacing any existing entries for it.
+ * Uses tree-sitter incremental parsing when a previous tree is cached.
+ */
+export function reindexFile(filePath: string): void {
+  const lang = getLanguageForFile(filePath);
+  if (!lang) return;
+
+  try {
+    const source = fs.readFileSync(filePath, "utf-8");
+    parser.setLanguage(lang.language);
+
+    const oldTree = treeCache.get(filePath);
+    const tree = parser.parse(source, oldTree);
+    treeCache.set(filePath, tree);
+
+    // Delete old entries for this file, then re-extract
+    deleteByFile(filePath);
+    extractFromTree(tree.rootNode, source, filePath, lang);
+  } catch {
+    // skip files that tree-sitter can't parse
+  }
+}
+
+/** Remove a file's entries from the index and tree cache. */
+export function removeFile(filePath: string): void {
+  treeCache.delete(filePath);
+  deleteByFile(filePath);
+}
+
+/** Clear the tree cache (e.g. on session shutdown). */
+export function clearTreeCache(): void {
+  treeCache.clear();
 }

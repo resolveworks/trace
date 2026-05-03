@@ -1,30 +1,52 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
-import { indexProject } from "../src/indexer.js";
-import { findDefinition, findCallers, getOutline, closeDb } from "../src/db.js";
-
-let indexed = false;
+import chokidar, { type FSWatcher } from "chokidar";
+import { indexProject, reindexFile, removeFile, clearTreeCache } from "../src/indexer.js";
+import { findDefinition, findCallers, getOutline, closeDb, openDb } from "../src/db.js";
 
 export default function (pi: ExtensionAPI) {
-  // Index the codebase at session start
+  let watcher: FSWatcher | null = null;
+
+  // Index the codebase at session start, then keep it in sync via file watching
   pi.on("session_start", async (_event, ctx) => {
-    if (indexed) return;
+    openDb();
     try {
       const result = indexProject(ctx.cwd);
-      indexed = true;
       ctx.ui.notify(
         `arbid: indexed ${result.files} files, ${result.symbols} symbols, ${result.calls} calls (${result.langs.join(", ") || "none"})`,
         "info",
       );
     } catch (err) {
       ctx.ui.notify(`arbid: index failed — ${err}`, "error");
+      return;
     }
+
+    // Start watching for changes
+    watcher = chokidar.watch(ctx.cwd, {
+      ignoreInitial: true,
+    });
+
+    watcher.on("add", (filePath: string) => {
+      reindexFile(filePath);
+    });
+
+    watcher.on("change", (filePath: string) => {
+      reindexFile(filePath);
+    });
+
+    watcher.on("unlink", (filePath: string) => {
+      removeFile(filePath);
+    });
   });
 
   // Clean up on shutdown
   pi.on("session_shutdown", async () => {
+    if (watcher) {
+      watcher.close();
+      watcher = null;
+    }
+    clearTreeCache();
     closeDb();
-    indexed = false;
   });
 
   // def(name) — get function/class definition
@@ -41,31 +63,26 @@ export default function (pi: ExtensionAPI) {
       name: Type.String({ description: "Name of the symbol to look up" }),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const result = findDefinition(params.name);
-      if (!result) {
+      const results = findDefinition(params.name);
+      if (results.length === 0) {
         return {
           content: [{ type: "text" as const, text: `No definition found for "${params.name}"` }],
           details: {} as Record<string, never>,
         };
       }
+
+      const header =
+        results.length === 1
+          ? `1 definition of "${params.name}":`
+          : `${results.length} definitions of "${params.name}":`;
+
+      const blocks = results.map((r, i) =>
+        [`${i + 1}. ${r.kind} in ${r.file}:${r.start_line}-${r.end_line}`, r.body].join("\n"),
+      );
+
       return {
-        content: [
-          {
-            type: "text" as const,
-            text: [
-              `${result.name} (${result.kind}) — ${result.file}:${result.start_line}-${result.end_line}`,
-              "",
-              result.body,
-            ].join("\n"),
-          },
-        ],
-        details: {
-          name: result.name,
-          kind: result.kind,
-          file: result.file,
-          start_line: result.start_line,
-          end_line: result.end_line,
-        },
+        content: [{ type: "text" as const, text: [header, "", ...blocks].join("\n\n") }],
+        details: { definitions: results },
       };
     },
   });
