@@ -141,8 +141,24 @@ export default function (pi: ExtensionAPI) {
           details: {} as Record<string, never>,
         };
       }
+      const fileCache = new Map<string, string[]>();
+      const getLines = (file: string): string[] | undefined => {
+        if (fileCache.has(file)) return fileCache.get(file);
+        try {
+          const lines = fs.readFileSync(path.resolve(_ctx.cwd, file), "utf-8").split("\n");
+          fileCache.set(file, lines);
+          return lines;
+        } catch {
+          return undefined;
+        }
+      };
       const lines = results.map((c) => {
         const scope = c.caller_name ? `${c.caller_name} (${c.caller_kind})` : "(top-level)";
+        const fileLines = getLines(c.file);
+        const snippet = fileLines?.[c.line - 1]?.trim();
+        if (snippet) {
+          return `${c.file}:${c.line} — called in ${scope}\n    ${snippet}`;
+        }
         return `${c.file}:${c.line} — called in ${scope}`;
       });
       return {
