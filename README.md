@@ -4,7 +4,7 @@ Deterministic code navigation for [Pi](https://github.com/mariofusco/pi) — thr
 
 - **`def(name)`** — return a function/class/method/type body as one unit, with file path and precise line range.
 - **`callers(name)`** — find every syntactic call site for a symbol via AST traversal.
-- **`outline(file)`** — list symbols in a file or directory, with kind and line range. Deep mode shows nested members.
+- **`outline(file)`** — list symbols in a file or directory, with kind and line range. Nested members (e.g. class methods, interface members, inner types) are shown indented under their parents.
 
 ## How it works
 

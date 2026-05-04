@@ -176,13 +176,10 @@ export interface OutlineSymbol {
   parent_id: number | null;
 }
 
-export function getOutline(file: string, deep = false): OutlineSymbol[] {
+export function getOutline(file: string): OutlineSymbol[] {
   if (!db) return [];
-  let sql = "SELECT id, name, kind, start_line, end_line, parent_id FROM symbols WHERE file = ?";
-  if (!deep) {
-    sql += " AND parent_id IS NULL";
-  }
-  sql += " ORDER BY start_line";
+  const sql =
+    "SELECT id, name, kind, start_line, end_line, parent_id FROM symbols WHERE file = ? ORDER BY start_line";
   const rows = db.prepare(sql).all(file) as Record<string, unknown>[];
   return rows.map((r) => ({
     id: r.id as number,
@@ -199,16 +196,13 @@ export interface DirSymbol extends OutlineSymbol {
 }
 
 /** List all symbols from indexed files under a directory prefix. */
-export function getDirOutline(dir: string, deep = false): DirSymbol[] {
+export function getDirOutline(dir: string): DirSymbol[] {
   if (!db) return [];
   const prefix = dir ? `${dir}/` : "";
-  let sql = `SELECT file, id, name, kind, start_line, end_line, parent_id
+  const sql = `SELECT file, id, name, kind, start_line, end_line, parent_id
        FROM symbols
-       WHERE file LIKE (? || '%')`;
-  if (!deep) {
-    sql += " AND parent_id IS NULL";
-  }
-  sql += " ORDER BY file, start_line";
+       WHERE file LIKE (? || '%')
+       ORDER BY file, start_line`;
   const rows = db.prepare(sql).all(prefix) as Record<string, unknown>[];
   return rows.map((r) => ({
     file: r.file as string,

@@ -18,7 +18,7 @@ import {
 } from "../src/db.js";
 
 // Kinds that represent executable code blocks; we don't descend into their
-// children in deep outline mode (avoids showing local arrow functions, etc.)
+// children (avoids showing local arrow functions, etc.)
 const FUNCTION_LIKE_KINDS = new Set([
   "function_declaration",
   "function_expression",
@@ -240,42 +240,31 @@ export default function (pi: ExtensionAPI) {
     name: "outline",
     label: "Outline",
     description:
-      "List the symbols defined in a file or directory, such as functions, classes, types, interfaces, and enums. Returns each symbol's name, kind, and line range. By default shows only top-level symbols; enable deep mode to include nested members such as class methods, interface members, and inner types.",
+      "List the symbols defined in a file or directory, such as functions, classes, types, interfaces, and enums. Returns each symbol's name, kind, and line range. Nested members such as class methods, interface members, and inner types are shown indented under their parents.",
     promptSnippet: "List the structure of a file or directory",
     promptGuidelines: [
       "Use outline to quickly see what symbols are defined in a file or directory and where they are located.",
-      "Enable deep mode to explore the hierarchy of types, classes, and their members.",
     ],
     parameters: Type.Object({
       file: Type.String({
         description: "Path to the file or directory (relative to project root, or absolute)",
       }),
-      deep: Type.Optional(
-        Type.Boolean({
-          description: "Show nested symbols (e.g. class methods) indented under their parents",
-          default: false,
-        }),
-      ),
     }),
     renderCall(args, theme, _context) {
       let text = theme.fg("toolTitle", theme.bold("outline "));
       text += theme.fg("accent", args.file);
-      if (args.deep) {
-        text += theme.fg("muted", " --deep");
-      }
       return new Text(text, 0, 0);
     },
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const resolved = path.resolve(_ctx.cwd, params.file);
       const relPath = path.relative(_ctx.cwd, resolved);
-      const deep = params.deep ?? false;
 
       const isDir =
         (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) || relPath === "";
 
       if (isDir) {
-        const results = getDirOutline(relPath, deep);
+        const results = getDirOutline(relPath);
         if (results.length === 0) {
           return {
             content: [
@@ -296,14 +285,8 @@ export default function (pi: ExtensionAPI) {
         }
         for (const [file, fileSymbols] of byFile) {
           lines.push(`${file}:`);
-          if (deep) {
-            const tree = buildSymbolTree(fileSymbols);
-            lines.push(...renderTreeLines(tree, null, "  "));
-          } else {
-            for (const s of fileSymbols) {
-              lines.push(`  ${s.name} (${shortKind(s.kind)}) — ${s.start_line}-${s.end_line}`);
-            }
-          }
+          const tree = buildSymbolTree(fileSymbols);
+          lines.push(...renderTreeLines(tree, null, "  "));
         }
         return {
           content: [{ type: "text" as const, text: lines.join("\n") }],
@@ -311,7 +294,7 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      const results = getOutline(relPath, deep);
+      const results = getOutline(relPath);
       if (results.length === 0) {
         return {
           content: [
@@ -324,15 +307,8 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      let lines: string[];
-      if (deep) {
-        const tree = buildSymbolTree(results);
-        lines = renderTreeLines(tree);
-      } else {
-        lines = results.map(
-          (s) => `${s.name} (${shortKind(s.kind)}) — ${s.start_line}-${s.end_line}`,
-        );
-      }
+      const tree = buildSymbolTree(results);
+      const lines = renderTreeLines(tree);
       return {
         content: [{ type: "text" as const, text: lines.join("\n") }],
         details: { symbols: results },
