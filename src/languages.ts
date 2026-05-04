@@ -15,33 +15,13 @@ export interface LoadedLang {
   extensions: string[];
 }
 
-function readTags(pkgName: string, tagPaths: string[]): string {
+function readTags(specifiers: string[]): string {
   let combined = "";
-  for (const tagPath of tagPaths) {
-    const specifier = `${pkgName}/${tagPath}`;
-    const resolved = import.meta.resolve(specifier);
-    combined += fs.readFileSync(new URL(resolved), "utf-8") + "\n";
+  for (const spec of specifiers) {
+    combined += fs.readFileSync(new URL(import.meta.resolve(spec)), "utf-8") + "\n";
   }
   return combined.replace(/^.*#strip!.*\n?/gm, "").replace(/^.*#select-adjacent!.*\n?/gm, "");
 }
-
-function loadLocalQuery(filename: string): string {
-  const thisDir = path.dirname(new URL(import.meta.url).pathname);
-  const candidates = [
-    path.join(thisDir, "..", "queries", filename), // src/
-    path.join(thisDir, "..", "..", "queries", filename), // dist/src/
-  ];
-  for (const p of candidates) {
-    try {
-      return fs.readFileSync(p, "utf-8") + "\n";
-    } catch {
-      // try next candidate
-    }
-  }
-  return "";
-}
-
-const JSX_TAGS = loadLocalQuery("jsx-tags.scm");
 
 export const byExtension = new Map<string, LoadedLang>();
 
@@ -49,30 +29,28 @@ for (const cfg of [
   {
     name: "python",
     lang: python,
-    pkg: "tree-sitter-python",
-    tags: ["queries/tags.scm"],
+    tags: ["tree-sitter-python/queries/tags.scm"],
     exts: [".py"],
   },
-  { name: "rust", lang: rust, pkg: "tree-sitter-rust", tags: ["queries/tags.scm"], exts: [".rs"] },
+  { name: "rust", lang: rust, tags: ["tree-sitter-rust/queries/tags.scm"], exts: [".rs"] },
   {
     name: "typescript",
     lang: typescript,
-    pkg: "tree-sitter-typescript",
-    tags: ["queries/tags.scm", "node_modules/tree-sitter-javascript/queries/tags.scm"],
+    tags: ["tree-sitter-typescript/queries/tags.scm", "tree-sitter-javascript/queries/tags.scm"],
     exts: [".ts"],
   },
   {
     name: "tsx",
     lang: tsx,
-    pkg: "tree-sitter-typescript",
-    tags: ["queries/tags.scm", "node_modules/tree-sitter-javascript/queries/tags.scm"],
+    tags: [
+      "tree-sitter-typescript/queries/tags.scm",
+      "tree-sitter-javascript/queries/tags.scm",
+      "../queries/jsx-tags.scm",
+    ],
     exts: [".tsx"],
   },
 ]) {
-  let queryText = readTags(cfg.pkg, cfg.tags);
-  if (cfg.name === "tsx") {
-    queryText += JSX_TAGS;
-  }
+  const queryText = readTags(cfg.tags);
 
   const loaded: LoadedLang = {
     name: cfg.name,

@@ -5,9 +5,7 @@
     "moduleResolution": "bundler",
     "strict": true,
     "esModuleInterop": true,
-    "skipLibCheck": true,
-    "outDir": "dist",
-    "rootDir": "."
+    "skipLibCheck": true
   },
   "include": ["extensions/**/*.ts", "src/**/*.ts", "tests/**/*.ts"]
 }
