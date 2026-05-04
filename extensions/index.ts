@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import chokidar, { type FSWatcher } from "chokidar";
 import { byExtension } from "../src/languages.js";
@@ -69,6 +70,12 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       name: Type.String({ description: "Name of the symbol to look up" }),
     }),
+    renderCall(args, theme, _context) {
+      let text = theme.fg("toolTitle", theme.bold("def "));
+      text += theme.fg("accent", args.name);
+      return new Text(text, 0, 0);
+    },
+
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const results = findDefinition(params.name);
       if (results.length === 0) {
@@ -101,7 +108,7 @@ export default function (pi: ExtensionAPI) {
       });
 
       return {
-        content: [{ type: "text" as const, text: [header, "", ...blocks].join("\n\n") }],
+        content: [{ type: "text" as const, text: [header, ...blocks].join("\n\n") }],
         details: { definitions: results },
       };
     },
@@ -120,6 +127,12 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       name: Type.String({ description: "Name of the function or method" }),
     }),
+    renderCall(args, theme, _context) {
+      let text = theme.fg("toolTitle", theme.bold("callers "));
+      text += theme.fg("accent", args.name);
+      return new Text(text, 0, 0);
+    },
+
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const results = findCallers(params.name);
       if (results.length === 0) {
@@ -154,6 +167,12 @@ export default function (pi: ExtensionAPI) {
         description: "Path to the file or directory (relative to project root, or absolute)",
       }),
     }),
+    renderCall(args, theme, _context) {
+      let text = theme.fg("toolTitle", theme.bold("outline "));
+      text += theme.fg("accent", args.file);
+      return new Text(text, 0, 0);
+    },
+
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const resolved = path.resolve(_ctx.cwd, params.file);
       const relPath = path.relative(_ctx.cwd, resolved);
