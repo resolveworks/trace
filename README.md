@@ -1,6 +1,6 @@
 # arbid
 
-Deterministic code navigation for [Pi](https://github.com/mariofusco/pi) — three tools built on tree-sitter + SQLite that answer common exploration questions in one call instead of chains of `rg` + `read`.
+Deterministic code navigation for [Pi](https://pi.dev) — three tools built on tree-sitter + SQLite that answer common exploration questions in one call instead of chains of `rg` + `read`.
 
 - **`def(name)`** — return a function/class/method/type body as one unit, with file path and precise line range.
 - **`callers(name)`** — find every syntactic call site for a symbol via AST traversal.
