@@ -8,7 +8,12 @@ export interface Symbol {
   file: string;
   start_line: number;
   end_line: number;
-  body: string;
+  parent_id: number | null;
+}
+
+export interface Definition extends Symbol {
+  parent_name: string | null;
+  parent_kind: string | null;
 }
 
 export interface CallSite {
@@ -45,7 +50,7 @@ function createSchema(db: DatabaseType): void {
       file TEXT NOT NULL,
       start_line INTEGER NOT NULL,
       end_line INTEGER NOT NULL,
-      body TEXT NOT NULL
+      parent_id INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS calls (
@@ -81,14 +86,20 @@ export function insertSymbol(
   file: string,
   startLine: number,
   endLine: number,
-  body: string,
+  parentId: number | null = null,
 ): number {
   if (!db) throw new Error("Database not open");
   const stmt = db.prepare(
-    "INSERT INTO symbols (name, kind, file, start_line, end_line, body) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO symbols (name, kind, file, start_line, end_line, parent_id) VALUES (?, ?, ?, ?, ?, ?)",
   );
-  const result = stmt.run(name, kind, file, startLine, endLine, body);
+  const result = stmt.run(name, kind, file, startLine, endLine, parentId);
   return Number(result.lastInsertRowid);
+}
+
+export function updateSymbolParent(id: number, parentId: number): void {
+  if (!db) throw new Error("Database not open");
+  const stmt = db.prepare("UPDATE symbols SET parent_id = ? WHERE id = ?");
+  stmt.run(parentId, id);
 }
 
 export function insertCall(
@@ -106,10 +117,16 @@ export function insertCall(
 
 // --- Query functions ---
 
-export function findDefinition(name: string): Symbol[] {
+export function findDefinition(name: string): Definition[] {
   if (!db) return [];
   const rows = db
-    .prepare("SELECT * FROM symbols WHERE name = ? ORDER BY LENGTH(file) ASC, start_line ASC")
+    .prepare(
+      `SELECT s.*, p.name AS parent_name, p.kind AS parent_kind
+       FROM symbols s
+       LEFT JOIN symbols p ON s.parent_id = p.id
+       WHERE s.name = ?
+       ORDER BY LENGTH(s.file) ASC, s.start_line ASC`,
+    )
     .all(name) as Record<string, unknown>[];
   return rows.map((row) => ({
     id: row.id as number,
@@ -118,7 +135,9 @@ export function findDefinition(name: string): Symbol[] {
     file: row.file as string,
     start_line: row.start_line as number,
     end_line: row.end_line as number,
-    body: row.body as string,
+    parent_id: (row.parent_id as number | null) ?? null,
+    parent_name: (row.parent_name as string | null) ?? null,
+    parent_kind: (row.parent_kind as string | null) ?? null,
   }));
 }
 

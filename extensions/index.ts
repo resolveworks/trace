@@ -83,9 +83,22 @@ export default function (pi: ExtensionAPI) {
           ? `1 definition of "${params.name}":`
           : `${results.length} definitions of "${params.name}":`;
 
-      const blocks = results.map((r, i) =>
-        [`${i + 1}. ${r.kind} in ${r.file}:${r.start_line}-${r.end_line}`, r.body].join("\n"),
-      );
+      const blocks = results.map((r, i) => {
+        const qualName = r.parent_name ? `${r.parent_name}.${r.name}` : r.name;
+        const label =
+          results.length === 1
+            ? `${r.kind} ${qualName} in ${r.file}:${r.start_line}-${r.end_line}`
+            : `${i + 1}. ${r.kind} ${qualName} in ${r.file}:${r.start_line}-${r.end_line}`;
+        // Read actual file lines to ensure correct indentation (tree-sitter body strips
+        // leading whitespace for nested definitions)
+        const filePath = path.resolve(_ctx.cwd, r.file);
+        const fileLines = fs.readFileSync(filePath, "utf-8").split("\n");
+        const lines = fileLines.slice(r.start_line - 1, r.end_line);
+        const numberedBody = lines
+          .map((line, idx) => `${String(r.start_line + idx).padStart(4)} | ${line}`)
+          .join("\n");
+        return [label, numberedBody].join("\n");
+      });
 
       return {
         content: [{ type: "text" as const, text: [header, "", ...blocks].join("\n\n") }],

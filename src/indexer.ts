@@ -2,7 +2,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import Parser, { type SyntaxNode, type Tree } from "tree-sitter";
 import { getLanguageForFile, byExtension, type LoadedLang } from "./languages.js";
-import { openDb, clearAll, deleteByFile, insertSymbol, insertCall } from "./db.js";
+import {
+  openDb,
+  clearAll,
+  deleteByFile,
+  insertSymbol,
+  insertCall,
+  updateSymbolParent,
+} from "./db.js";
 
 const parser = new Parser();
 const treeCache = new Map<string, Tree>();
@@ -95,7 +102,7 @@ function extractFromTree(
 
       const key = `${name}|${startLine}`;
       if (!defMap.has(key)) {
-        const dbId = insertSymbol(name, kind, file, startLine, endLine, body);
+        const dbId = insertSymbol(name, kind, file, startLine, endLine);
         defMap.set(key, { dbId, name, kind, startLine, endLine });
       }
     } else if (refNode && nameNode) {
@@ -103,15 +110,23 @@ function extractFromTree(
     }
   }
 
+  // Compute parent relationships for nested definitions (e.g. methods inside classes)
+  const allDefs = [...defMap.values()];
+  for (const d of allDefs) {
+    const parent = findEnclosingDef(d.startLine, allDefs, d.dbId);
+    if (parent) {
+      updateSymbolParent(d.dbId, parent.dbId);
+    }
+  }
+
   // Attribute each buffered reference to its nearest enclosing definition,
   // or leave caller_id NULL for file-level references.
   let callCount = 0;
   if (refBuffer.length > 0) {
-    const defs = [...defMap.values()];
     for (const { refNode, nameNode } of refBuffer) {
       const calleeName = nameNode.text;
       const line = refNode.startPosition.row + 1;
-      const parent = findEnclosingDef(refNode.startPosition.row + 1, defs);
+      const parent = findEnclosingDef(refNode.startPosition.row + 1, allDefs);
       insertCall(parent?.dbId ?? null, calleeName, file, line);
       callCount++;
     }
@@ -120,10 +135,15 @@ function extractFromTree(
   return { symbols: defMap.size, callCount };
 }
 
-function findEnclosingDef(line: number, defs: ExtractedDef[]): ExtractedDef | null {
+function findEnclosingDef(
+  line: number,
+  defs: ExtractedDef[],
+  excludeId?: number,
+): ExtractedDef | null {
   let best: ExtractedDef | null = null;
   let bestSize = Infinity;
   for (const d of defs) {
+    if (excludeId !== undefined && d.dbId === excludeId) continue;
     if (line >= d.startLine && line <= d.endLine) {
       const size = d.endLine - d.startLine;
       if (size < bestSize) {
