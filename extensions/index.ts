@@ -61,7 +61,7 @@ function renderTreeLines(
   const children = tree.get(parentId) ?? [];
   const lines: string[] = [];
   for (const s of children) {
-    lines.push(`${indent}${s.name} (${shortKind(s.kind)}) — lines ${s.start_line}-${s.end_line}`);
+    lines.push(`${indent}${s.name} (${shortKind(s.kind)}) — ${s.start_line}-${s.end_line}`);
     if (!FUNCTION_LIKE_KINDS.has(s.kind)) {
       lines.push(...renderTreeLines(tree, s.id, indent + "  "));
     }
@@ -116,10 +116,10 @@ export default function (pi: ExtensionAPI) {
     name: "def",
     label: "Definition",
     description:
-      "Return the full source body of a function, class, method, type, or interface by name. Returns the entire definition — matched braces/brackets, all inner code — with file path and precise line range. One call gets you the complete implementation.",
-    promptSnippet: "Look up a named definition and return its full body",
+      "Retrieve the complete source body of a named function, class, method, type, interface, or enum across the project. Returns the full definition with original indentation, plus file path and exact line range. If the name appears in multiple places, all definitions are returned. Optionally narrow the search to a specific file.",
+    promptSnippet: "Get the full implementation of a named symbol",
     promptGuidelines: [
-      "Use def to get a function/class/type's complete body as one unit. Returns the exact code block with matched delimiters and line range.",
+      "Use def when you need the complete body and exact line range of a specific named symbol. Provide the symbol name; use the optional file parameter when the name appears in multiple files or to disambiguate overloaded symbols.",
     ],
     parameters: Type.Object({
       name: Type.String({ description: "Name of the symbol to look up" }),
@@ -184,10 +184,10 @@ export default function (pi: ExtensionAPI) {
     name: "callers",
     label: "Callers",
     description:
-      "Find every call site for a named function or method by analyzing the syntax tree. Returns file, line, and enclosing function for each call. AST-based, so it correctly resolves calls through renames, callbacks, and method dispatch.",
-    promptSnippet: "Find where a function or method is called",
+      "Find every syntactic call site for a named function or method across the project. Returns each invocation with its file path, line number, and the enclosing function or scope where it occurs. Does not trace variable reassignments, import aliases, or resolve types.",
+    promptSnippet: "Find all invocations of a named function or method",
     promptGuidelines: [
-      "Use callers to find all call sites of a function/method. AST-aware so it catches aliased calls, callbacks, and method dispatch.",
+      "Use callers when you need to know where a specific function or method is invoked syntactically. It finds direct calls and method invocations, but will not trace through variable reassignments or import aliases.",
     ],
     parameters: Type.Object({
       name: Type.String({ description: "Name of the function or method" }),
@@ -217,17 +217,19 @@ export default function (pi: ExtensionAPI) {
           return undefined;
         }
       };
-      const lines = results.map((c) => {
+      const blocks = results.map((c) => {
         const scope = c.caller_name ? `${c.caller_name} (${c.caller_kind})` : "(top-level)";
         const fileLines = getLines(c.file);
-        const snippet = fileLines?.[c.line - 1]?.trim();
+        const snippet = fileLines?.[c.line - 1];
+        const label = `${c.file}:${c.line} — called in ${scope}`;
         if (snippet) {
-          return `${c.file}:${c.line} — called in ${scope}\n    ${snippet}`;
+          const numbered = `${String(c.line).padStart(4)} | ${snippet}`;
+          return [label, numbered].join("\n");
         }
-        return `${c.file}:${c.line} — called in ${scope}`;
+        return label;
       });
       return {
-        content: [{ type: "text" as const, text: lines.join("\n") }],
+        content: [{ type: "text" as const, text: blocks.join("\n\n") }],
         details: { callers: results },
       };
     },
@@ -238,11 +240,11 @@ export default function (pi: ExtensionAPI) {
     name: "outline",
     label: "Outline",
     description:
-      "List top-level symbols in a file or directory — functions, classes, types, interfaces, enums — with their kind and line range. In deep mode, shows nested members (e.g. class methods) indented under their parents, but skips local variables and nested functions.",
-    promptSnippet: "List top-level symbols in a file or directory",
+      "List the symbols defined in a file or directory, such as functions, classes, types, interfaces, and enums. Returns each symbol's name, kind, and line range. By default shows only top-level symbols; enable deep mode to include nested members such as class methods, interface members, and inner types.",
+    promptSnippet: "List the structure of a file or directory",
     promptGuidelines: [
-      "Use outline to get a file's symbol structure before reading it. Returns name, kind, and line range for each top-level symbol.",
-      "Use deep mode to see nested members like class methods. Local variables inside functions are never shown.",
+      "Use outline to quickly see what symbols are defined in a file or directory and where they are located.",
+      "Enable deep mode to explore the hierarchy of types, classes, and their members.",
     ],
     parameters: Type.Object({
       file: Type.String({
@@ -299,9 +301,7 @@ export default function (pi: ExtensionAPI) {
             lines.push(...renderTreeLines(tree, null, "  "));
           } else {
             for (const s of fileSymbols) {
-              lines.push(
-                `  ${s.name} (${shortKind(s.kind)}) — lines ${s.start_line}-${s.end_line}`,
-              );
+              lines.push(`  ${s.name} (${shortKind(s.kind)}) — ${s.start_line}-${s.end_line}`);
             }
           }
         }
@@ -330,7 +330,7 @@ export default function (pi: ExtensionAPI) {
         lines = renderTreeLines(tree);
       } else {
         lines = results.map(
-          (s) => `${s.name} (${shortKind(s.kind)}) — lines ${s.start_line}-${s.end_line}`,
+          (s) => `${s.name} (${shortKind(s.kind)}) — ${s.start_line}-${s.end_line}`,
         );
       }
       return {
