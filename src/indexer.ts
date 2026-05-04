@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import ignore from "ignore";
 import Parser, { type SyntaxNode, type Tree } from "tree-sitter";
 import { getLanguageForFile, byExtension, type LoadedLang } from "./languages.js";
 import {
@@ -155,15 +156,47 @@ function findEnclosingDef(
   return best;
 }
 
-function collectFiles(dir: string, rootDir: string): string[] {
+interface IgnoreEntry {
+  dir: string;
+  ig: ReturnType<typeof ignore>;
+}
+
+function isIgnored(fullPath: string, ignoreChain: IgnoreEntry[]): boolean {
+  let result = false;
+  for (const { dir, ig } of ignoreChain) {
+    const rel = path.relative(dir, fullPath).replace(/\\/g, "/");
+    if (rel.startsWith("..") || rel === "") continue;
+    const t = ig.test(rel);
+    if (t.ignored || t.unignored) {
+      result = t.ignored;
+    }
+  }
+  return result;
+}
+
+function collectFiles(dir: string, rootDir: string, ignoreChain: IgnoreEntry[] = []): string[] {
   const results: string[] = [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+  const gitignorePath = path.join(dir, ".gitignore");
+  let chain = ignoreChain;
+  if (fs.existsSync(gitignorePath)) {
+    try {
+      const content = fs.readFileSync(gitignorePath, "utf-8");
+      chain = [...ignoreChain, { dir, ig: ignore().add(content) }];
+    } catch {
+      // malformed or unreadable .gitignore — skip it
+    }
+  }
 
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
 
+    if (entry.name === ".git") continue;
+    if (isIgnored(fullPath, chain)) continue;
+
     if (entry.isDirectory()) {
-      results.push(...collectFiles(fullPath, rootDir));
+      results.push(...collectFiles(fullPath, rootDir, chain));
     } else if (entry.isFile() && byExtension.has(path.extname(entry.name).toLowerCase())) {
       results.push(path.relative(rootDir, fullPath));
     }
