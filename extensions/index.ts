@@ -13,7 +13,61 @@ import {
   getDirOutline,
   closeDb,
   openDb,
+  type OutlineSymbol,
+  type DirSymbol,
 } from "../src/db.js";
+
+// Kinds that represent executable code blocks; we don't descend into their
+// children in deep outline mode (avoids showing local arrow functions, etc.)
+const FUNCTION_LIKE_KINDS = new Set([
+  "function_declaration",
+  "function_expression",
+  "generator_function",
+  "generator_function_declaration",
+  "method_definition",
+  "method_signature",
+  "abstract_method_signature",
+  "lexical_declaration",
+  "variable_declaration",
+  "assignment_expression",
+  "pair",
+]);
+
+function shortKind(kind: string): string {
+  return kind
+    .replace(/_declaration$/, "")
+    .replace(/_definition$/, "")
+    .replace(/_signature$/, "");
+}
+
+function buildSymbolTree(symbols: OutlineSymbol[]): Map<number | null, OutlineSymbol[]> {
+  const map = new Map<number | null, OutlineSymbol[]>();
+  for (const s of symbols) {
+    const key = s.parent_id;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(s);
+  }
+  for (const children of map.values()) {
+    children.sort((a, b) => a.start_line - b.start_line);
+  }
+  return map;
+}
+
+function renderTreeLines(
+  tree: Map<number | null, OutlineSymbol[]>,
+  parentId: number | null = null,
+  indent: string = "",
+): string[] {
+  const children = tree.get(parentId) ?? [];
+  const lines: string[] = [];
+  for (const s of children) {
+    lines.push(`${indent}${s.name} (${shortKind(s.kind)}) — lines ${s.start_line}-${s.end_line}`);
+    if (!FUNCTION_LIKE_KINDS.has(s.kind)) {
+      lines.push(...renderTreeLines(tree, s.id, indent + "  "));
+    }
+  }
+  return lines;
+}
 
 export default function (pi: ExtensionAPI) {
   let watcher: FSWatcher | null = null;
@@ -69,18 +123,29 @@ export default function (pi: ExtensionAPI) {
     ],
     parameters: Type.Object({
       name: Type.String({ description: "Name of the symbol to look up" }),
+      file: Type.Optional(
+        Type.String({
+          description: "Optional file path to narrow the search (relative to project root)",
+        }),
+      ),
     }),
     renderCall(args, theme, _context) {
       let text = theme.fg("toolTitle", theme.bold("def "));
       text += theme.fg("accent", args.name);
+      if (args.file) {
+        text += theme.fg("dim", " in " + args.file);
+      }
       return new Text(text, 0, 0);
     },
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const results = findDefinition(params.name);
+      const results = findDefinition(params.name, params.file);
       if (results.length === 0) {
+        const scope = params.file ? ` in "${params.file}"` : "";
         return {
-          content: [{ type: "text" as const, text: `No definition found for "${params.name}"` }],
+          content: [
+            { type: "text" as const, text: `No definition found for "${params.name}"${scope}` },
+          ],
           details: {} as Record<string, never>,
         };
       }
@@ -173,31 +238,42 @@ export default function (pi: ExtensionAPI) {
     name: "outline",
     label: "Outline",
     description:
-      "List all top-level symbols in a file or directory — functions, classes, types, interfaces, enums — with their kind and line range, sorted by line. Gives you the file's structure without reading it.",
+      "List top-level symbols in a file or directory — functions, classes, types, interfaces, enums — with their kind and line range. In deep mode, shows nested members (e.g. class methods) indented under their parents, but skips local variables and nested functions.",
     promptSnippet: "List top-level symbols in a file or directory",
     promptGuidelines: [
       "Use outline to get a file's symbol structure before reading it. Returns name, kind, and line range for each top-level symbol.",
+      "Use deep mode to see nested members like class methods. Local variables inside functions are never shown.",
     ],
     parameters: Type.Object({
       file: Type.String({
         description: "Path to the file or directory (relative to project root, or absolute)",
       }),
+      deep: Type.Optional(
+        Type.Boolean({
+          description: "Show nested symbols (e.g. class methods) indented under their parents",
+          default: false,
+        }),
+      ),
     }),
     renderCall(args, theme, _context) {
       let text = theme.fg("toolTitle", theme.bold("outline "));
       text += theme.fg("accent", args.file);
+      if (args.deep) {
+        text += theme.fg("muted", " --deep");
+      }
       return new Text(text, 0, 0);
     },
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
       const resolved = path.resolve(_ctx.cwd, params.file);
       const relPath = path.relative(_ctx.cwd, resolved);
+      const deep = params.deep ?? false;
 
       const isDir =
         (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) || relPath === "";
 
       if (isDir) {
-        const results = getDirOutline(relPath);
+        const results = getDirOutline(relPath, deep);
         if (results.length === 0) {
           return {
             content: [
@@ -211,13 +287,23 @@ export default function (pi: ExtensionAPI) {
         }
 
         const lines: string[] = [];
-        let currentFile = "";
+        const byFile = new Map<string, DirSymbol[]>();
         for (const s of results) {
-          if (s.file !== currentFile) {
-            currentFile = s.file;
-            lines.push(`${currentFile}:`);
+          if (!byFile.has(s.file)) byFile.set(s.file, []);
+          byFile.get(s.file)!.push(s);
+        }
+        for (const [file, fileSymbols] of byFile) {
+          lines.push(`${file}:`);
+          if (deep) {
+            const tree = buildSymbolTree(fileSymbols);
+            lines.push(...renderTreeLines(tree, null, "  "));
+          } else {
+            for (const s of fileSymbols) {
+              lines.push(
+                `  ${s.name} (${shortKind(s.kind)}) — lines ${s.start_line}-${s.end_line}`,
+              );
+            }
           }
-          lines.push(`  ${s.name} (${s.kind}) — lines ${s.start_line}-${s.end_line}`);
         }
         return {
           content: [{ type: "text" as const, text: lines.join("\n") }],
@@ -225,7 +311,7 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      const results = getOutline(relPath);
+      const results = getOutline(relPath, deep);
       if (results.length === 0) {
         return {
           content: [
@@ -237,9 +323,16 @@ export default function (pi: ExtensionAPI) {
           details: {} as Record<string, never>,
         };
       }
-      const lines = results.map(
-        (s) => `${s.name} (${s.kind}) — lines ${s.start_line}-${s.end_line}`,
-      );
+
+      let lines: string[];
+      if (deep) {
+        const tree = buildSymbolTree(results);
+        lines = renderTreeLines(tree);
+      } else {
+        lines = results.map(
+          (s) => `${s.name} (${shortKind(s.kind)}) — lines ${s.start_line}-${s.end_line}`,
+        );
+      }
       return {
         content: [{ type: "text" as const, text: lines.join("\n") }],
         details: { symbols: results },

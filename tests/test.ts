@@ -83,6 +83,19 @@ if (outline.length > 0) {
 const outlineNone = getOutline("nonexistent/file.ts");
 assert(outlineNone.length === 0, "getOutline('nonexistent') returns empty array");
 
+// Deep mode should include nested symbols (methods inside classes, etc.)
+const outlineDeep = getOutline("extensions/index.ts", true);
+assert(
+  outlineDeep.length >= outline.length,
+  "deep mode returns at least as many symbols as top-level",
+);
+
+// Default mode should only return top-level symbols (parent_id === null)
+assert(
+  outline.every((s) => s.parent_id === null),
+  "default outline only returns top-level symbols",
+);
+
 // --- Cleanup ---
 closeDb();
 

@@ -117,17 +117,19 @@ export function insertCall(
 
 // --- Query functions ---
 
-export function findDefinition(name: string): Definition[] {
+export function findDefinition(name: string, file?: string): Definition[] {
   if (!db) return [];
-  const rows = db
-    .prepare(
-      `SELECT s.*, p.name AS parent_name, p.kind AS parent_kind
+  let sql = `SELECT s.*, p.name AS parent_name, p.kind AS parent_kind
        FROM symbols s
        LEFT JOIN symbols p ON s.parent_id = p.id
-       WHERE s.name = ?
-       ORDER BY LENGTH(s.file) ASC, s.start_line ASC`,
-    )
-    .all(name) as Record<string, unknown>[];
+       WHERE s.name = ?`;
+  const args: (string | null)[] = [name];
+  if (file) {
+    sql += " AND s.file = ?";
+    args.push(file);
+  }
+  sql += " ORDER BY LENGTH(s.file) ASC, s.start_line ASC";
+  const rows = db.prepare(sql).all(...args) as Record<string, unknown>[];
   return rows.map((row) => ({
     id: row.id as number,
     name: row.name as string,
