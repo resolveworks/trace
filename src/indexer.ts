@@ -128,7 +128,7 @@ function extractFromTree(
       const calleeName = nameNode.text;
       const line = refNode.startPosition.row + 1;
       const parent = findEnclosingDef(refNode.startPosition.row + 1, allDefs);
-      insertCall(parent?.dbId ?? null, calleeName, file, line);
+      insertCall(parent?.dbId ?? null, calleeName, file, line, refNode.endPosition.row + 1);
       callCount++;
     }
   }

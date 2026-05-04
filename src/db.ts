@@ -22,6 +22,7 @@ export interface CallSite {
   callee_name: string;
   file: string;
   line: number;
+  end_line: number;
 }
 
 let db: DatabaseType | null = null;
@@ -59,6 +60,7 @@ function createSchema(db: DatabaseType): void {
       callee_name TEXT NOT NULL,
       file TEXT NOT NULL,
       line INTEGER NOT NULL,
+      end_line INTEGER NOT NULL,
       FOREIGN KEY (caller_id) REFERENCES symbols(id)
     );
 
@@ -107,12 +109,13 @@ export function insertCall(
   calleeName: string,
   file: string,
   line: number,
+  endLine: number,
 ): void {
   if (!db) throw new Error("Database not open");
   const stmt = db.prepare(
-    "INSERT INTO calls (caller_id, callee_name, file, line) VALUES (?, ?, ?, ?)",
+    "INSERT INTO calls (caller_id, callee_name, file, line, end_line) VALUES (?, ?, ?, ?, ?)",
   );
-  stmt.run(callerId, calleeName, file, line);
+  stmt.run(callerId, calleeName, file, line, endLine);
 }
 
 // --- Query functions ---
@@ -147,7 +150,7 @@ export function findCallers(name: string): CallSite[] {
   if (!db) return [];
   const rows = db
     .prepare(
-      `SELECT s.name AS caller_name, s.kind AS caller_kind, c.callee_name, c.file, c.line
+      `SELECT s.name AS caller_name, s.kind AS caller_kind, c.callee_name, c.file, c.line, c.end_line
        FROM calls c
        LEFT JOIN symbols s ON c.caller_id = s.id
        WHERE c.callee_name = ?
@@ -160,6 +163,7 @@ export function findCallers(name: string): CallSite[] {
     callee_name: r.callee_name as string,
     file: r.file as string,
     line: r.line as number,
+    end_line: r.end_line as number,
   }));
 }
 

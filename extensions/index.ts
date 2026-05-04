@@ -220,13 +220,13 @@ export default function (pi: ExtensionAPI) {
       const blocks = results.map((c) => {
         const scope = c.caller_name ? `${c.caller_name} (${c.caller_kind})` : "(top-level)";
         const fileLines = getLines(c.file);
-        const snippet = fileLines?.[c.line - 1];
         const label = `${c.file}:${c.line} — called in ${scope}`;
-        if (snippet) {
-          const numbered = `${String(c.line).padStart(4)} | ${snippet}`;
-          return [label, numbered].join("\n");
-        }
-        return label;
+        if (!fileLines) return label;
+        const lines = fileLines.slice(c.line - 1, c.end_line);
+        const numbered = lines
+          .map((line, idx) => `${String(c.line + idx).padStart(4)} | ${line}`)
+          .join("\n");
+        return [label, numbered].join("\n");
       });
       return {
         content: [{ type: "text" as const, text: blocks.join("\n\n") }],
