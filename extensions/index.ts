@@ -5,7 +5,7 @@ import { Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import chokidar, { type FSWatcher } from "chokidar";
 import { byExtension } from "../src/languages.js";
-import { indexProject, reindexFile, removeFile, clearTreeCache } from "../src/indexer.js";
+import { indexProject, reindexFile, removeFile } from "../src/indexer.js";
 import {
   findDefinition,
   findCallers,
@@ -107,7 +107,6 @@ export default function (pi: ExtensionAPI) {
       watcher.close();
       watcher = null;
     }
-    clearTreeCache();
     closeDb();
   });
 

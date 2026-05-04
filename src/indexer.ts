@@ -13,7 +13,6 @@ import {
 } from "./db.js";
 
 const parser = new Parser();
-const treeCache = new Map<string, Tree>();
 
 export function indexProject(rootDir: string): {
   files: number;
@@ -38,7 +37,6 @@ export function indexProject(rootDir: string): {
       const source = fs.readFileSync(file, "utf-8");
       parser.setLanguage(lang.language);
       const tree = parser.parse(source);
-      treeCache.set(file, tree);
 
       const { symbols, callCount } = extractFromTree(tree.rootNode, source, file, lang);
       totalSymbols += symbols;
@@ -216,10 +214,7 @@ export function reindexFile(filePath: string): void {
   try {
     const source = fs.readFileSync(filePath, "utf-8");
     parser.setLanguage(lang.language);
-
-    const oldTree = treeCache.get(filePath);
-    const tree = parser.parse(source, oldTree);
-    treeCache.set(filePath, tree);
+    const tree = parser.parse(source);
 
     deleteByFile(filePath);
     extractFromTree(tree.rootNode, source, filePath, lang);
@@ -228,13 +223,7 @@ export function reindexFile(filePath: string): void {
   }
 }
 
-/** Remove a file's entries from the index and tree cache. */
+/** Remove a file's entries from the index. */
 export function removeFile(filePath: string): void {
-  treeCache.delete(filePath);
   deleteByFile(filePath);
-}
-
-/** Clear the tree cache (e.g. on session shutdown). */
-export function clearTreeCache(): void {
-  treeCache.clear();
 }
