@@ -110,21 +110,6 @@ export default function (pi: ExtensionAPI) {
     closeDb();
   });
 
-  // Inject system-prompt guidance so the model prefers symbol-level tools
-  pi.on("before_agent_start", async (event, _ctx) => {
-    const guidance =
-      "\n\nStructural navigation workflow:\n" +
-      "1. outline(file) — Discover what symbols live in a file or directory: functions, classes, methods, types, interfaces, enums, and their exact line ranges. " +
-      "Use this to map files and find the specific names you need.\n" +
-      "2. def(name) — Pull the complete source body of a specific function, class, method, type, interface, or enum by name, with original indentation and exact line numbers. " +
-      "Since pulling related symbols individually still preserves cross-method context, use this to study implementations after outline tells you what's worth looking at.\n" +
-      "3. callers(name) — Find every direct syntactic call to a function or method across the project, with file path, line number, and enclosing scope. " +
-      "Use this to trace cross-layer coupling before refactoring. Does not trace through variable reassignments, import aliases, or resolve types.\n" +
-      "\n" +
-      "In short: outline to discover, def to inspect, callers to trace impact.";
-    return { systemPrompt: event.systemPrompt + guidance };
-  });
-
   // def(name) — get function/class definition
   pi.registerTool({
     name: "def",
@@ -133,7 +118,7 @@ export default function (pi: ExtensionAPI) {
       "Retrieve the complete source body of a named function, class, method, type, interface, or enum across the project. Returns the full definition with original indentation, plus file path and exact line range. If the name appears in multiple places, all definitions are returned. Optionally narrow the search to a specific file.",
     promptSnippet: "Get the full implementation of a named symbol",
     promptGuidelines: [
-      "Use def when you need the complete body and exact line range of a specific named symbol. Provide the symbol name; use the optional file parameter when the name appears in multiple files or to disambiguate overloaded symbols.",
+      "Use def when you already know the exact symbol name and need its full implementation. Pass the file parameter to disambiguate overloaded names.",
     ],
     parameters: Type.Object({
       name: Type.String({ description: "Name of the symbol to look up" }),
@@ -201,7 +186,7 @@ export default function (pi: ExtensionAPI) {
       "Find every syntactic call site for a named function or method across the project. Returns each invocation with its file path, line number, and the enclosing function or scope where it occurs. Does not trace variable reassignments, import aliases, or resolve types.",
     promptSnippet: "Find all invocations of a named function or method",
     promptGuidelines: [
-      "Use callers when you need to know where a specific function or method is invoked syntactically. It finds direct calls and method invocations, but will not trace through variable reassignments or import aliases.",
+      "Use callers to trace how a specific function or method is used across the project. It does not follow reassignments, aliases, or resolved types.",
     ],
     parameters: Type.Object({
       name: Type.String({ description: "Name of the function or method" }),
@@ -257,7 +242,7 @@ export default function (pi: ExtensionAPI) {
       "List the symbols defined in a file or directory, such as functions, classes, types, interfaces, and enums. Returns each symbol's name, kind, and line range. Nested members such as class methods, interface members, and inner types are shown indented under their parents.",
     promptSnippet: "List the structure of a file or directory",
     promptGuidelines: [
-      "Use outline to quickly see what symbols are defined in a file or directory and where they are located.",
+      "Use outline to map an unfamiliar file or directory before deciding which symbols to inspect with def or callers.",
     ],
     parameters: Type.Object({
       file: Type.String({
