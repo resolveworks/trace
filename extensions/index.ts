@@ -110,6 +110,21 @@ export default function (pi: ExtensionAPI) {
     closeDb();
   });
 
+  // Inject system-prompt guidance so the model prefers symbol-level tools
+  pi.on("before_agent_start", async (event, _ctx) => {
+    const guidance =
+      "\n\nStructural navigation workflow:\n" +
+      "1. outline(file) — Discover what symbols live in a file or directory: functions, classes, methods, types, interfaces, enums, and their exact line ranges. " +
+      "Use this to map files and find the specific names you need.\n" +
+      "2. def(name) — Pull the complete source body of a specific function, class, method, type, interface, or enum by name, with original indentation and exact line numbers. " +
+      "Since pulling related symbols individually still preserves cross-method context, use this to study implementations after outline tells you what's worth looking at.\n" +
+      "3. callers(name) — Find every direct syntactic call to a function or method across the project, with file path, line number, and enclosing scope. " +
+      "Use this to trace cross-layer coupling before refactoring. Does not trace through variable reassignments, import aliases, or resolve types.\n" +
+      "\n" +
+      "In short: outline to discover, def to inspect, callers to trace impact.";
+    return { systemPrompt: event.systemPrompt + guidance };
+  });
+
   // def(name) — get function/class definition
   pi.registerTool({
     name: "def",
