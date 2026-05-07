@@ -4,7 +4,7 @@ import { findDefinition, findCallers, getOutline, closeDb } from "../src/db.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-const TRACE_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const TRACE_ROOT = path.resolve(import.meta.dirname, "..");
 
 let passed = 0;
 let failed = 0;
