@@ -1,4 +1,4 @@
-# arbid
+# trace
 
 Deterministic code exploration primitives for Pi — three tools built on tree-sitter + SQLite that answer common navigation questions in one call instead of chains of `rg` + `read`.
 
@@ -9,7 +9,7 @@ Deterministic code exploration primitives for Pi — three tools built on tree-s
 ## Structure
 
 ```
-arbid/
+trace/
 ├── extensions/index.ts    # registers def, callers, outline with Pi
 ├── src/
 │   ├── indexer.ts         # walk repo → parse → extract symbols & calls via tag queries

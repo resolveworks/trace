@@ -1,5 +1,5 @@
 {
-  "name": "arbid",
+  "name": "trace",
   "version": "0.0.0",
   "description": "Deterministic code exploration primitives for Pi — tree-sitter + SQLite tools for finding callers, definitions, and file outlines",
   "keywords": [

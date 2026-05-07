@@ -77,11 +77,11 @@ export default function (pi: ExtensionAPI) {
     try {
       const result = indexProject(ctx.cwd);
       ctx.ui.notify(
-        `arbid: indexed ${result.files} files, ${result.symbols} symbols, ${result.calls} calls (${result.langs.join(", ") || "none"})`,
+        `trace: indexed ${result.files} files, ${result.symbols} symbols, ${result.calls} calls (${result.langs.join(", ") || "none"})`,
         "info",
       );
     } catch (err) {
-      ctx.ui.notify(`arbid: index failed — ${err}`, "error");
+      ctx.ui.notify(`trace: index failed — ${err}`, "error");
       return;
     }
 

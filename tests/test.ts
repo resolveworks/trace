@@ -4,7 +4,7 @@ import { findDefinition, findCallers, getOutline, closeDb } from "../src/db.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-const ARBID_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const TRACE_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 
 let passed = 0;
 let failed = 0;
@@ -28,8 +28,8 @@ assert(langNames.includes("typescript"), "typescript grammar");
 assert(byExtension.has(".ts"), ".ts extension mapped");
 
 // --- Index ---
-console.log("\nIndexing arbid source...");
-const result = indexProject(ARBID_ROOT);
+console.log("\nIndexing trace source...");
+const result = indexProject(TRACE_ROOT);
 console.log(`  Indexed ${result.files} files, ${result.symbols} symbols, ${result.calls} calls`);
 console.log(`  Languages: ${result.langs.join(", ")}`);
 
@@ -44,7 +44,7 @@ assert(defs.length > 0, "findDefinition('indexProject') returns non-null");
 const d = defs[0];
 assert(d.kind === "function_declaration", `kind is function_declaration (got ${d.kind})`);
 assert(d.file.includes("src/indexer.ts"), `file is src/indexer.ts (got ${d.file})`);
-const fileContent = fs.readFileSync(path.join(ARBID_ROOT, d.file), "utf-8");
+const fileContent = fs.readFileSync(path.join(TRACE_ROOT, d.file), "utf-8");
 const bodyLines = fileContent.split("\n").slice(d.start_line - 1, d.end_line);
 assert(bodyLines.join("\n").includes("function indexProject"), "body contains function definition");
 assert(d.start_line > 0, `start_line > 0 (got ${d.start_line})`);

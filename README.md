@@ -1,4 +1,4 @@
-# arbid
+# trace
 
 Deterministic code navigation for [Pi](https://pi.dev) — three tools built on tree-sitter + SQLite that answer common exploration questions in one call instead of chains of `rg` + `read`.
 
