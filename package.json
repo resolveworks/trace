@@ -40,5 +40,10 @@
   },
   "lint-staged": {
     "*": "prettier --write --ignore-unknown"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
   }
 }
