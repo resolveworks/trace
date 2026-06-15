@@ -245,18 +245,18 @@ export default function (pi: ExtensionAPI) {
       "Use outline to map an unfamiliar file or directory before deciding which symbols to inspect with def or callers.",
     ],
     parameters: Type.Object({
-      file: Type.String({
+      path: Type.String({
         description: "Path to the file or directory (relative to project root, or absolute)",
       }),
     }),
     renderCall(args, theme, _context) {
       let text = theme.fg("toolTitle", theme.bold("outline "));
-      text += theme.fg("accent", args.file);
+      text += theme.fg("accent", args.path);
       return new Text(text, 0, 0);
     },
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const resolved = path.resolve(_ctx.cwd, params.file);
+      const resolved = path.resolve(_ctx.cwd, params.path);
       const relPath = path.relative(_ctx.cwd, resolved);
 
       const isDir =
@@ -269,7 +269,7 @@ export default function (pi: ExtensionAPI) {
             content: [
               {
                 type: "text" as const,
-                text: `No symbols found under "${params.file}" (directory not indexed or empty)`,
+                text: `No symbols found under "${params.path}" (directory not indexed or empty)`,
               },
             ],
             details: {} as Record<string, never>,
@@ -299,7 +299,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text" as const,
-              text: `No symbols found in "${params.file}" (not indexed or not a file)`,
+              text: `No symbols found in "${params.path}" (not indexed or not a file)`,
             },
           ],
           details: {} as Record<string, never>,
