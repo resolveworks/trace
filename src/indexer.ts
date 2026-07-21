@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import ignore from "ignore";
-import Parser, { type SyntaxNode, type Tree } from "tree-sitter";
-import { getLanguageForFile, byExtension, type LoadedLang } from "./languages.js";
+import Parser, { type SyntaxNode } from "tree-sitter";
+import { getLanguageForFile, type LoadedLang } from "./languages.js";
+import { ProjectFilter } from "./project-filter.js";
 import {
   openDb,
   clearAll,
@@ -14,7 +14,7 @@ import {
 
 const parser = new Parser();
 
-export function indexProject(rootDir: string): {
+export function indexProject(filter: ProjectFilter): {
   files: number;
   symbols: number;
   calls: number;
@@ -23,18 +23,18 @@ export function indexProject(rootDir: string): {
   openDb();
   clearAll();
 
-  const files = collectFiles(rootDir, rootDir);
+  const root = filter.root;
+  const files = collectFiles(root, root, filter);
   let totalSymbols = 0;
   let totalCalls = 0;
   const langs = new Set<string>();
 
   for (const file of files) {
-    const lang = getLanguageForFile(file);
-    if (!lang) continue;
+    const lang = getLanguageForFile(file)!;
     langs.add(lang.name);
 
     try {
-      const source = fs.readFileSync(file, "utf-8");
+      const source = fs.readFileSync(path.join(root, file), "utf-8");
       parser.setLanguage(lang.language);
       const tree = parser.parse(source);
 
@@ -154,65 +154,30 @@ function findEnclosingDef(
   return best;
 }
 
-interface IgnoreEntry {
-  dir: string;
-  ig: ReturnType<typeof ignore>;
-}
-
-function isIgnored(fullPath: string, ignoreChain: IgnoreEntry[]): boolean {
-  let result = false;
-  for (const { dir, ig } of ignoreChain) {
-    const rel = path.relative(dir, fullPath).replace(/\\/g, "/");
-    if (rel.startsWith("..") || rel === "") continue;
-    const t = ig.test(rel);
-    if (t.ignored || t.unignored) {
-      result = t.ignored;
-    }
-  }
-  return result;
-}
-
-function collectFiles(dir: string, rootDir: string, ignoreChain: IgnoreEntry[] = []): string[] {
+function collectFiles(dir: string, root: string, filter: ProjectFilter): string[] {
   const results: string[] = [];
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-
-  const gitignorePath = path.join(dir, ".gitignore");
-  let chain = ignoreChain;
-  if (fs.existsSync(gitignorePath)) {
-    try {
-      const content = fs.readFileSync(gitignorePath, "utf-8");
-      chain = [...ignoreChain, { dir, ig: ignore().add(content) }];
-    } catch {
-      // malformed or unreadable .gitignore — skip it
-    }
-  }
+  const entries = fs
+    .readdirSync(dir, { withFileTypes: true })
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-
-    if (entry.name === ".git") continue;
-    if (isIgnored(fullPath, chain)) continue;
-
-    if (entry.isDirectory()) {
-      results.push(...collectFiles(fullPath, rootDir, chain));
-    } else if (entry.isFile() && byExtension.has(path.extname(entry.name).toLowerCase())) {
-      results.push(path.relative(rootDir, fullPath));
+    const filePath = path.join(dir, entry.name);
+    if (entry.isDirectory() && filter.includesDirectory(filePath)) {
+      results.push(...collectFiles(filePath, root, filter));
+    } else if (entry.isFile() && filter.includesFile(filePath)) {
+      results.push(path.relative(root, filePath));
     }
   }
-
   return results;
 }
 
-/**
- * Re-index a single file, replacing any existing entries for it.
- * Uses tree-sitter incremental parsing when a previous tree is cached.
- */
-export function reindexFile(filePath: string): void {
+/** Re-index a single source file, replacing any existing entries for it. */
+export function reindexFile(rootDir: string, filePath: string): void {
   const lang = getLanguageForFile(filePath);
   if (!lang) return;
 
   try {
-    const source = fs.readFileSync(filePath, "utf-8");
+    const source = fs.readFileSync(path.resolve(rootDir, filePath), "utf-8");
     parser.setLanguage(lang.language);
     const tree = parser.parse(source);
 

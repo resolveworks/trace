@@ -4,8 +4,8 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import chokidar, { type FSWatcher } from "chokidar";
-import { byExtension } from "../src/languages.js";
 import { indexProject, reindexFile, removeFile } from "../src/indexer.js";
+import { ProjectFilter } from "../src/project-filter.js";
 import {
   findDefinition,
   findCallers,
@@ -74,8 +74,9 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     openDb();
+    const filter = new ProjectFilter(ctx.cwd);
     try {
-      const result = indexProject(ctx.cwd);
+      const result = indexProject(filter);
       ctx.ui.notify(
         `trace: indexed ${result.files} files, ${result.symbols} symbols, ${result.calls} calls (${result.langs.join(", ") || "none"})`,
         "info",
@@ -85,26 +86,27 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
-    watcher = chokidar.watch(ctx.cwd, { ignoreInitial: true });
-
-    const relPath = (p: string) => path.relative(ctx.cwd, p);
-
-    watcher.on("add", (filePath: string) => {
-      reindexFile(relPath(filePath));
+    watcher = chokidar.watch(filter.root, {
+      ignoreInitial: true,
+      followSymlinks: false,
+      ignored: filter.watcherIgnored,
     });
 
-    watcher.on("change", (filePath: string) => {
-      reindexFile(relPath(filePath));
-    });
-
+    const update = (filePath: string) => {
+      if (filter.includesFile(filePath)) {
+        reindexFile(ctx.cwd, path.relative(ctx.cwd, filePath));
+      }
+    };
+    watcher.on("add", update);
+    watcher.on("change", update);
     watcher.on("unlink", (filePath: string) => {
-      removeFile(relPath(filePath));
+      if (filter.includesFile(filePath)) removeFile(path.relative(ctx.cwd, filePath));
     });
   });
 
   pi.on("session_shutdown", async () => {
     if (watcher) {
-      watcher.close();
+      await watcher.close();
       watcher = null;
     }
     closeDb();
