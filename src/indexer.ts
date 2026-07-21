@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import Parser, { type SyntaxNode } from "tree-sitter";
-import { getLanguageForFile, type LoadedLang } from "./languages.js";
-import { ProjectFilter } from "./project-filter.js";
+import { getLanguageForFile, type LoadedLang } from "./languages.ts";
+import { ProjectFilter } from "./project-filter.ts";
 import {
   openDb,
   clearAll,
@@ -10,7 +10,7 @@ import {
   insertSymbol,
   insertCall,
   updateSymbolParent,
-} from "./db.js";
+} from "./db.ts";
 
 const parser = new Parser();
 

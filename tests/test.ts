@@ -1,8 +1,8 @@
 import chokidar from "chokidar";
-import { indexProject } from "../src/indexer.js";
-import { byExtension } from "../src/languages.js";
-import { ProjectFilter } from "../src/project-filter.js";
-import { findDefinition, findCallers, getOutline, closeDb } from "../src/db.js";
+import { indexProject } from "../src/indexer.ts";
+import { byExtension } from "../src/languages.ts";
+import { ProjectFilter } from "../src/project-filter.ts";
+import { findDefinition, findCallers, getOutline, closeDb } from "../src/db.ts";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";

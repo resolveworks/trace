@@ -4,8 +4,8 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
 import chokidar, { type FSWatcher } from "chokidar";
-import { indexProject, reindexFile, removeFile } from "../src/indexer.js";
-import { ProjectFilter } from "../src/project-filter.js";
+import { indexProject, reindexFile, removeFile } from "../src/indexer.ts";
+import { ProjectFilter } from "../src/project-filter.ts";
 import {
   findDefinition,
   findCallers,
@@ -15,7 +15,7 @@ import {
   openDb,
   type OutlineSymbol,
   type DirSymbol,
-} from "../src/db.js";
+} from "../src/db.ts";
 
 // Kinds that represent executable code blocks; we don't descend into their
 // children (avoids showing local arrow functions, etc.)

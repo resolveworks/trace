@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Stats } from "node:fs";
 import ignore from "ignore";
-import { byExtension } from "./languages.js";
+import { byExtension } from "./languages.ts";
 
 type Rules = ReturnType<typeof ignore>;
 

@@ -1,6 +1,7 @@
 {
   "name": "trace",
   "version": "0.0.0",
+  "packageManager": "pnpm@11.3.0",
   "description": "Deterministic code exploration primitives for Pi — tree-sitter + SQLite tools for finding callers, definitions, and file outlines",
   "keywords": [
     "pi-package"
@@ -22,6 +23,7 @@
   },
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "^0.72.1",
+    "@mariozechner/pi-tui": "^0.72.1",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.6.0",
     "husky": "^9.1.7",
@@ -32,7 +34,7 @@
     "typescript": "^6.0.3"
   },
   "scripts": {
-    "test": "npx tsx tests/test.ts",
+    "test": "node tests/test.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -40,10 +42,5 @@
   },
   "lint-staged": {
     "*": "prettier --write --ignore-unknown"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "better-sqlite3"
-    ]
   }
 }

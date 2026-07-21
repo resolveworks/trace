@@ -1,0 +1,10 @@
+allowBuilds:
+  "@google/genai": false
+  better-sqlite3: true
+  koffi: false
+  protobufjs: false
+  tree-sitter: true
+  tree-sitter-javascript: true
+  tree-sitter-python: true
+  tree-sitter-rust: true
+  tree-sitter-typescript: true
