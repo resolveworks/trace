@@ -4,7 +4,7 @@
   "description": "Deterministic code exploration primitives for Pi — tree-sitter + SQLite tools for finding callers, definitions, and file outlines",
   "packageManager": "pnpm@11.3.0",
   "engines": {
-    "node": ">=20.19.0"
+    "node": ">=22.18.0"
   },
   "keywords": [
     "pi-package"
@@ -15,9 +15,6 @@
       "./extensions"
     ]
   },
-  "bin": {
-    "traced": "./bin/traced.js"
-  },
   "dependencies": {
     "better-sqlite3": "^12.9.0",
     "chokidar": "^5.0.0",
@@ -27,8 +24,7 @@
     "tree-sitter-javascript": "^0.25.0",
     "tree-sitter-python": "^0.25.0",
     "tree-sitter-rust": "^0.24.0",
-    "tree-sitter-typescript": "^0.23.2",
-    "tsx": "^4.23.1"
+    "tree-sitter-typescript": "^0.23.2"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
@@ -46,8 +42,8 @@
     "typescript": "^6.0.3"
   },
   "scripts": {
-    "test": "tsx tests/test.ts",
-    "traced": "tsx src/daemon.ts",
+    "test": "node tests/test.ts",
+    "traced": "node src/daemon.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

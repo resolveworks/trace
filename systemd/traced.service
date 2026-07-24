@@ -3,8 +3,7 @@ Description=trace source index
 
 [Service]
 Type=simple
-Environment=PATH=%h/.local/bin:%h/.local/share/pnpm/bin:/usr/local/bin:/usr/bin
-ExecStart=/usr/bin/env traced
+ExecStart=/usr/bin/env node %h/projects/trace/src/daemon.ts
 UMask=0077
 
 [Install]

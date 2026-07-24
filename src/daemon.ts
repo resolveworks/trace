@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import { TraceServer } from "./server.ts";
 
 const server = new TraceServer();

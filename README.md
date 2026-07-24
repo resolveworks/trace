@@ -39,10 +39,9 @@ The socket and database always live under `~/.pi/agent/extensions/trace/`. The e
 
 ## Running with systemd
 
-Install the package so `traced` is on the service's deterministic pnpm path, then configure the daemon roots:
+Configure the daemon roots, then install the service:
 
 ```sh
-pnpm link --global
 mkdir -p ~/.pi/agent ~/.config/systemd/user
 cat > ~/.pi/agent/trace.json <<'EOF'
 {
@@ -65,7 +64,7 @@ The service deliberately has no restart loop or compatibility mode. Configuratio
 
 ## Development
 
-Requires Node.js 20.19 or newer and pnpm 11.3.0 (pinned in `package.json`).
+Requires Node.js 22.18 or newer (native TypeScript type stripping) and pnpm 11.3.0 (pinned in `package.json`).
 
 > **Temporary:** `tree-sitter` resolves from `../node-tree-sitter` until current upstream releases are published again. Check out that repository beside this one before installing.
 

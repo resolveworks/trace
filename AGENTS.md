@@ -12,7 +12,6 @@ Tool paths default to Pi's current working directory, relative paths resolve fro
 
 ```text
 trace/
-├── bin/traced.js           # executable daemon launcher
 ├── extensions/index.ts     # Pi tools; mandatory IPC client only
 ├── src/
 │   ├── daemon.ts           # daemon process entrypoint
