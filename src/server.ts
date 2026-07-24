@@ -120,15 +120,13 @@ export class TraceServer {
         }
         request = this.parseRequest(frame);
         const response: TraceResponse = {
-          id: request.id,
           ok: true,
           result: this.execute(request),
         };
         socket.end(JSON.stringify(response) + "\n");
       } catch (error) {
         if (!(error instanceof RequestError)) throw error;
-        const id = this.readId(frame);
-        const response: TraceResponse = { id, ok: false, error: error.message };
+        const response: TraceResponse = { ok: false, error: error.message };
         socket.end(JSON.stringify(response) + "\n");
       }
     });
@@ -143,7 +141,6 @@ export class TraceServer {
     }
     if (!value || typeof value !== "object") throw new RequestError("request must be an object");
     const request = value as Record<string, unknown>;
-    if (!Number.isInteger(request.id)) throw new RequestError("request.id must be an integer");
     if (typeof request.scope !== "string") throw new RequestError("request.scope must be a string");
     if (!(["ping", "def", "callers", "outline"] as unknown[]).includes(request.op)) {
       throw new RequestError("unknown request operation");
@@ -152,15 +149,6 @@ export class TraceServer {
       throw new RequestError(`request.name is required for ${request.op}`);
     }
     return request as unknown as TraceRequest;
-  }
-
-  private readId(frame: string): number {
-    try {
-      const value = JSON.parse(frame) as { id?: unknown };
-      return Number.isInteger(value?.id) ? (value.id as number) : 0;
-    } catch {
-      return 0;
-    }
   }
 
   private execute(request: TraceRequest): TraceResult {
