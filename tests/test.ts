@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { requestTrace } from "../src/client.ts";
 import { closeDb, findCallers, findDefinition, getOutline, openDb, syncRoots } from "../src/db.ts";
-import { indexRoot } from "../src/indexer.ts";
+import { indexRoot, initializeIndexer } from "../src/indexer.ts";
 import { byExtension } from "../src/languages.ts";
 import { ProjectFilter } from "../src/project-filter.ts";
 import { TraceServer } from "../src/server.ts";
@@ -48,6 +48,8 @@ function write(root: string, file: string, content: string): string {
   fs.writeFileSync(target, content);
   return target;
 }
+
+await initializeIndexer();
 
 console.log("Grammars...");
 const languages = [...new Set([...byExtension.values()].map((language) => language.name))];

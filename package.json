@@ -20,7 +20,7 @@
     "chokidar": "^5.0.0",
     "ignore": "^7.0.5",
     "typebox": "^1.1.37",
-    "tree-sitter": "file:../node-tree-sitter",
+    "web-tree-sitter": "0.26.11",
     "tree-sitter-javascript": "^0.25.0",
     "tree-sitter-python": "^0.25.0",
     "tree-sitter-rust": "^0.24.0",

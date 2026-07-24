@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import Parser, { type SyntaxNode } from "tree-sitter";
-import { getLanguageForFile, type LoadedLang } from "./languages.ts";
+import { Parser, type Node as SyntaxNode } from "web-tree-sitter";
+import { getLanguageForFile, initializeLanguages, type LoadedLang } from "./languages.ts";
 import { ProjectFilter } from "./project-filter.ts";
 import {
   deleteFile,
@@ -13,7 +13,23 @@ import {
   updateSymbolParent,
 } from "./db.ts";
 
-const parser = new Parser();
+let parser: Parser | null = null;
+
+/** Initialize the parser after the WASM runtime and grammars are ready. */
+export async function initializeIndexer(): Promise<void> {
+  await initializeLanguages();
+  parser ??= new Parser();
+}
+
+export function closeIndexer(): void {
+  parser?.delete();
+  parser = null;
+}
+
+function getParser(): Parser {
+  if (!parser) throw new Error("tree-sitter indexer is not initialized");
+  return parser;
+}
 
 export interface IndexResult {
   files: number;
@@ -22,6 +38,7 @@ export interface IndexResult {
 }
 
 export function indexRoot(rootId: number, filter: ProjectFilter): IndexResult {
+  getParser();
   const files = collectFiles(filter.root, filter);
   const indexed = getIndexedFiles(rootId);
   const present = new Set(files);
@@ -158,14 +175,21 @@ function indexSourceFile(
   sourceFile: SourceFile,
   lang: LoadedLang,
 ): void {
-  parser.setLanguage(lang.language);
-  const tree = parser.parse(sourceFile.source);
-  replaceFile(rootId, file, sourceFile.hash, (fileId) => {
-    extractFromTree(tree.rootNode, fileId, lang);
-  });
+  const activeParser = getParser();
+  activeParser.setLanguage(lang.language);
+  const tree = activeParser.parse(sourceFile.source);
+  if (!tree) throw new Error(`failed to parse source file: ${file}`);
+  try {
+    replaceFile(rootId, file, sourceFile.hash, (fileId) => {
+      extractFromTree(tree.rootNode, fileId, lang);
+    });
+  } finally {
+    tree.delete();
+  }
 }
 
 export function reindexFile(rootId: number, file: string): void {
+  getParser();
   const lang = getLanguageForFile(file);
   if (!lang) throw new Error(`unsupported source file: ${file}`);
   indexSourceFile(rootId, file, readSourceFile(file), lang);

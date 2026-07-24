@@ -66,7 +66,7 @@ The service deliberately has no restart loop or compatibility mode. Configuratio
 
 Requires Node.js 22.18 or newer (native TypeScript type stripping) and pnpm 11.3.0 (pinned in `package.json`).
 
-> **Temporary:** `tree-sitter` resolves from `../node-tree-sitter` until current upstream releases are published again. Check out that repository beside this one before installing.
+Grammar WASM files and tag queries are supplied by the `tree-sitter-*` npm grammar packages; no local grammar checkout is required.
 
 ```sh
 pnpm install --frozen-lockfile

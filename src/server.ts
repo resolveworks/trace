@@ -14,7 +14,8 @@ import {
   openDb,
   syncRoots,
 } from "./db.ts";
-import { indexRoot, reindexFile, removeFile } from "./indexer.ts";
+import { closeIndexer, indexRoot, initializeIndexer, reindexFile, removeFile } from "./indexer.ts";
+import { closeLanguages } from "./languages.ts";
 import { ProjectFilter } from "./project-filter.ts";
 import {
   TraceRequestSchema,
@@ -46,6 +47,7 @@ export class TraceServer {
   }
 
   async start(): Promise<void> {
+    await initializeIndexer();
     fs.mkdirSync(path.dirname(this.databasePath), { recursive: true, mode: 0o700 });
     fs.mkdirSync(path.dirname(this.socketPath), { recursive: true, mode: 0o700 });
     openDb(this.databasePath);
@@ -86,6 +88,8 @@ export class TraceServer {
       this.server = null;
     }
     closeDb();
+    closeIndexer();
+    closeLanguages();
   }
 
   private async watch(root: IndexedRoot): Promise<FSWatcher> {

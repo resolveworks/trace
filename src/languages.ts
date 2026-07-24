@@ -1,12 +1,7 @@
 import * as fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import * as path from "node:path";
-import { Query, type Language } from "tree-sitter";
-
-import python from "tree-sitter-python";
-import rust from "tree-sitter-rust";
-import tsGrammars from "tree-sitter-typescript";
-
-const { typescript, tsx } = tsGrammars;
+import { Language, Parser, Query } from "web-tree-sitter";
 
 export interface LoadedLang {
   name: string;
@@ -15,33 +10,35 @@ export interface LoadedLang {
   extensions: string[];
 }
 
-function readTags(specifiers: string[]): string {
-  let combined = "";
-  for (const spec of specifiers) {
-    combined += fs.readFileSync(new URL(import.meta.resolve(spec)), "utf-8") + "\n";
-  }
-  return combined.replace(/^.*#strip!.*\n?/gm, "").replace(/^.*#select-adjacent!.*\n?/gm, "");
+interface LanguageConfig {
+  name: string;
+  wasm: string;
+  tags: string[];
+  exts: string[];
 }
 
-export const byExtension = new Map<string, LoadedLang>();
-
-for (const cfg of [
+const configs: LanguageConfig[] = [
   {
     name: "python",
-    lang: python,
+    wasm: "tree-sitter-python/tree-sitter-python.wasm",
     tags: ["tree-sitter-python/queries/tags.scm"],
     exts: [".py"],
   },
-  { name: "rust", lang: rust, tags: ["tree-sitter-rust/queries/tags.scm"], exts: [".rs"] },
+  {
+    name: "rust",
+    wasm: "tree-sitter-rust/tree-sitter-rust.wasm",
+    tags: ["tree-sitter-rust/queries/tags.scm"],
+    exts: [".rs"],
+  },
   {
     name: "typescript",
-    lang: typescript,
+    wasm: "tree-sitter-typescript/tree-sitter-typescript.wasm",
     tags: ["tree-sitter-typescript/queries/tags.scm", "tree-sitter-javascript/queries/tags.scm"],
     exts: [".ts"],
   },
   {
     name: "tsx",
-    lang: tsx,
+    wasm: "tree-sitter-typescript/tree-sitter-tsx.wasm",
     tags: [
       "tree-sitter-typescript/queries/tags.scm",
       "tree-sitter-javascript/queries/tags.scm",
@@ -49,16 +46,47 @@ for (const cfg of [
     ],
     exts: [".tsx"],
   },
-]) {
-  const queryText = readTags(cfg.tags);
+];
 
-  const loaded: LoadedLang = {
-    name: cfg.name,
-    language: cfg.lang,
-    query: new Query(cfg.lang, queryText),
-    extensions: cfg.exts,
-  };
-  for (const ext of cfg.exts) byExtension.set(ext, loaded);
+export const byExtension = new Map<string, LoadedLang>();
+let parserInitialization: Promise<void> | null = null;
+let languageInitialization: Promise<void> | null = null;
+
+function resolvePackageFile(specifier: string): string {
+  return fileURLToPath(import.meta.resolve(specifier));
+}
+
+function readTags(specifiers: string[]): string {
+  let combined = "";
+  for (const specifier of specifiers) {
+    combined += fs.readFileSync(resolvePackageFile(specifier), "utf-8") + "\n";
+  }
+  return combined.replace(/^.*#strip!.*\n?/gm, "").replace(/^.*#select-adjacent!.*\n?/gm, "");
+}
+
+/** Initialize the WASM runtime and all configured grammars before indexing. */
+export function initializeLanguages(): Promise<void> {
+  parserInitialization ??= Parser.init();
+  languageInitialization ??= (async () => {
+    await parserInitialization;
+    for (const config of configs) {
+      const language = await Language.load(resolvePackageFile(config.wasm));
+      const loaded: LoadedLang = {
+        name: config.name,
+        language,
+        query: new Query(language, readTags(config.tags)),
+        extensions: config.exts,
+      };
+      for (const extension of loaded.extensions) byExtension.set(extension, loaded);
+    }
+  })();
+  return languageInitialization;
+}
+
+export function closeLanguages(): void {
+  for (const language of new Set(byExtension.values())) language.query.delete();
+  byExtension.clear();
+  languageInitialization = null;
 }
 
 export function getLanguageForFile(filePath: string): LoadedLang | null {
