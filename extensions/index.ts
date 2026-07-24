@@ -108,7 +108,6 @@ export default function (pi: ExtensionAPI) {
         name: params.name,
         scope: resolveScope(ctx.cwd, params.path),
       });
-      if (result.op !== "def") throw new Error(`unexpected trace response: ${result.op}`);
       if (result.definitions.length === 0) {
         return {
           content: [{ type: "text" as const, text: `No definition found for "${params.name}"` }],
@@ -168,7 +167,6 @@ export default function (pi: ExtensionAPI) {
         name: params.name,
         scope: resolveScope(ctx.cwd, params.path),
       });
-      if (result.op !== "callers") throw new Error(`unexpected trace response: ${result.op}`);
       if (result.callers.length === 0) {
         return {
           content: [{ type: "text" as const, text: `No callers found for "${params.name}"` }],
@@ -218,7 +216,6 @@ export default function (pi: ExtensionAPI) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const scope = resolveScope(ctx.cwd, params.path);
       const result = await requestTrace(getTraceSocketPath(), { op: "outline", scope });
-      if (result.op !== "outline") throw new Error(`unexpected trace response: ${result.op}`);
       if (result.symbols.length === 0) {
         return {
           content: [{ type: "text" as const, text: `No symbols found in "${scope}"` }],

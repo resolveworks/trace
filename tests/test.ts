@@ -132,24 +132,21 @@ try {
   await server.start();
   try {
     const outline = await requestTrace(socket, { op: "outline", scope: childA });
-    assert(outline.op === "outline", "daemon accepts an indexed subdirectory scope");
+    assert(outline.symbols.length === 2, "daemon accepts an indexed subdirectory scope");
 
     const definition = await requestTrace(socket, {
       op: "def",
       name: "shared",
       scope: rootB,
     });
-    assert(
-      definition.op === "def" && definition.definitions.length === 1,
-      "daemon query stays within explicit root",
-    );
+    assert(definition.definitions.length === 1, "daemon query stays within explicit root");
 
     const emptyOutline = await requestTrace(socket, {
       op: "outline",
       scope: path.join(rootA, "empty.py"),
     });
     assert(
-      emptyOutline.op === "outline" && emptyOutline.symbols.length === 0,
+      emptyOutline.symbols.length === 0,
       "indexed file with no symbols is a valid empty result",
     );
 
@@ -172,7 +169,7 @@ try {
         name: "watchedSymbol",
         scope: rootA,
       });
-      return response.op === "def" && response.definitions.length === 1;
+      return response.definitions.length === 1;
     }, "watcher indexes added source files");
 
     fs.unlinkSync(added);
@@ -182,7 +179,7 @@ try {
         name: "watchedSymbol",
         scope: rootA,
       });
-      return response.op === "def" && response.definitions.length === 0;
+      return response.definitions.length === 0;
     }, "watcher removes deleted source files");
   } finally {
     await server.close();

@@ -156,11 +156,11 @@ export class TraceServer {
     const scope = this.resolveScope(request.scope);
     switch (request.op) {
       case "def":
-        return { op: "def", definitions: findDefinition(request.name, scope) };
+        return { definitions: findDefinition(request.name, scope) };
       case "callers":
-        return { op: "callers", callers: findCallers(request.name, scope) };
+        return { callers: findCallers(request.name, scope) };
       case "outline":
-        return { op: "outline", symbols: getOutline(scope) };
+        return { symbols: getOutline(scope) };
     }
   }
 

@@ -1,7 +1,10 @@
 import * as net from "node:net";
-import type { TraceRequest, TraceResponse, TraceResult } from "./protocol.ts";
+import type { TraceRequest, TraceResponse, TraceResultMap } from "./protocol.ts";
 
-export function requestTrace(socketPath: string, request: TraceRequest): Promise<TraceResult> {
+export function requestTrace<Request extends TraceRequest>(
+  socketPath: string,
+  request: Request,
+): Promise<TraceResultMap[Request["op"]]> {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(socketPath);
     socket.setEncoding("utf-8");
@@ -19,7 +22,7 @@ export function requestTrace(socketPath: string, request: TraceRequest): Promise
       try {
         const response = JSON.parse(input.slice(0, newline)) as TraceResponse;
         if (!response.ok) throw new Error(response.error);
-        resolve(response.result);
+        resolve(response.result as TraceResultMap[Request["op"]]);
       } catch (error) {
         reject(error);
       }

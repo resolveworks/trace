@@ -9,9 +9,12 @@ export const TraceRequestSchema = Type.Union([
 
 export type TraceRequest = Static<typeof TraceRequestSchema>;
 
-export type TraceResult =
-  | { op: "def"; definitions: Definition[] }
-  | { op: "callers"; callers: CallSite[] }
-  | { op: "outline"; symbols: DirSymbol[] };
+export interface TraceResultMap {
+  def: { definitions: Definition[] };
+  callers: { callers: CallSite[] };
+  outline: { symbols: DirSymbol[] };
+}
+
+export type TraceResult = TraceResultMap[TraceRequest["op"]];
 
 export type TraceResponse = { ok: true; result: TraceResult } | { ok: false; error: string };
