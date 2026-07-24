@@ -1,55 +1,65 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import Parser, { type SyntaxNode } from "tree-sitter";
 import { getLanguageForFile, type LoadedLang } from "./languages.ts";
 import { ProjectFilter } from "./project-filter.ts";
 import {
-  openDb,
-  clearAll,
-  deleteByFile,
-  insertSymbol,
+  deleteFile,
+  getIndexedFiles,
   insertCall,
+  insertSymbol,
+  replaceFile,
   updateSymbolParent,
 } from "./db.ts";
 
 const parser = new Parser();
 
-export function indexProject(filter: ProjectFilter): {
+export interface IndexResult {
   files: number;
+  changed: number;
+  removed: number;
   symbols: number;
   calls: number;
   langs: string[];
-} {
-  openDb();
-  clearAll();
+}
 
-  const root = filter.root;
-  const files = collectFiles(root, root, filter);
-  let totalSymbols = 0;
-  let totalCalls = 0;
+export function indexRoot(rootId: number, filter: ProjectFilter): IndexResult {
+  const files = collectFiles(filter.root, filter);
+  const indexed = getIndexedFiles(rootId);
+  const present = new Set(files);
+  let changed = 0;
+  let removed = 0;
+  let symbols = 0;
+  let calls = 0;
   const langs = new Set<string>();
 
   for (const file of files) {
     const lang = getLanguageForFile(file)!;
     langs.add(lang.name);
+    const sourceFile = readSourceFile(file);
+    const previous = indexed.get(file);
+    if (previous?.hash === sourceFile.stamp.hash) continue;
 
-    try {
-      const source = fs.readFileSync(path.join(root, file), "utf-8");
-      parser.setLanguage(lang.language);
-      const tree = parser.parse(source);
+    const result = indexSourceFile(rootId, file, sourceFile, lang);
+    changed++;
+    symbols += result.symbols;
+    calls += result.calls;
+  }
 
-      const { symbols, callCount } = extractFromTree(tree.rootNode, source, file, lang);
-      totalSymbols += symbols;
-      totalCalls += callCount;
-    } catch {
-      // skip files that tree-sitter can't parse
+  for (const file of indexed.keys()) {
+    if (!present.has(file)) {
+      deleteFile(file);
+      removed++;
     }
   }
 
   return {
     files: files.length,
-    symbols: totalSymbols,
-    calls: totalCalls,
+    changed,
+    removed,
+    symbols,
+    calls,
     langs: [...langs].sort(),
   };
 }
@@ -64,17 +74,10 @@ interface ExtractedDef {
 
 function extractFromTree(
   root: SyntaxNode,
-  source: string,
-  file: string,
+  fileId: number,
   lang: LoadedLang,
-): { symbols: number; callCount: number } {
-  // Native tags.scm convention: @definition.X marks a definition node, @reference.X marks a
-  // reference node, @name marks the identifier. A single match pairs e.g. @definition.function
-  // with @name, or @reference.call with @name.
-  //
-  // We make a single pass over matches: collect definitions immediately, buffer references
-  // for attribution after all defs are known.
-  const defMap = new Map<string, ExtractedDef>(); // key: "name|startLine"
+): { symbols: number; calls: number } {
+  const defMap = new Map<string, ExtractedDef>();
   const refBuffer: { refNode: SyntaxNode; nameNode: SyntaxNode }[] = [];
 
   for (const match of lang.query.matches(root)) {
@@ -82,26 +85,24 @@ function extractFromTree(
     let refNode: SyntaxNode | null = null;
     let nameNode: SyntaxNode | null = null;
 
-    for (const cap of match.captures) {
-      if (cap.name.startsWith("definition.")) {
-        defNode = cap.node;
-      } else if (cap.name.startsWith("reference.")) {
-        refNode = cap.node;
-      } else if (cap.name === "name") {
-        nameNode = cap.node;
+    for (const capture of match.captures) {
+      if (capture.name.startsWith("definition.")) {
+        defNode = capture.node;
+      } else if (capture.name.startsWith("reference.")) {
+        refNode = capture.node;
+      } else if (capture.name === "name") {
+        nameNode = capture.node;
       }
     }
 
     if (defNode && nameNode) {
-      const kind = defNode.type;
       const name = nameNode.text;
       const startLine = defNode.startPosition.row + 1;
-      const endLine = defNode.endPosition.row + 1;
-      const body = source.slice(defNode.startIndex, defNode.endIndex);
-
       const key = `${name}|${startLine}`;
       if (!defMap.has(key)) {
-        const dbId = insertSymbol(name, kind, file, startLine, endLine);
+        const kind = defNode.type;
+        const endLine = defNode.endPosition.row + 1;
+        const dbId = insertSymbol(fileId, name, kind, startLine, endLine);
         defMap.set(key, { dbId, name, kind, startLine, endLine });
       }
     } else if (refNode && nameNode) {
@@ -109,86 +110,92 @@ function extractFromTree(
     }
   }
 
-  // Compute parent relationships for nested definitions (e.g. methods inside classes)
-  const allDefs = [...defMap.values()];
-  for (const d of allDefs) {
-    const parent = findEnclosingDef(d.startLine, allDefs, d.dbId);
-    if (parent) {
-      updateSymbolParent(d.dbId, parent.dbId);
-    }
+  const definitions = [...defMap.values()];
+  for (const definition of definitions) {
+    const parent = findEnclosingDef(definition.startLine, definitions, definition.dbId);
+    if (parent) updateSymbolParent(definition.dbId, parent.dbId);
   }
 
-  // Attribute each buffered reference to its nearest enclosing definition,
-  // or leave caller_id NULL for file-level references.
-  let callCount = 0;
-  if (refBuffer.length > 0) {
-    for (const { refNode, nameNode } of refBuffer) {
-      const calleeName = nameNode.text;
-      const line = refNode.startPosition.row + 1;
-      const parent = findEnclosingDef(refNode.startPosition.row + 1, allDefs);
-      insertCall(parent?.dbId ?? null, calleeName, file, line, refNode.endPosition.row + 1);
-      callCount++;
-    }
+  for (const { refNode, nameNode } of refBuffer) {
+    const line = refNode.startPosition.row + 1;
+    const parent = findEnclosingDef(line, definitions);
+    insertCall(fileId, parent?.dbId ?? null, nameNode.text, line, refNode.endPosition.row + 1);
   }
 
-  return { symbols: defMap.size, callCount };
+  return { symbols: defMap.size, calls: refBuffer.length };
 }
 
 function findEnclosingDef(
   line: number,
-  defs: ExtractedDef[],
+  definitions: ExtractedDef[],
   excludeId?: number,
 ): ExtractedDef | null {
   let best: ExtractedDef | null = null;
   let bestSize = Infinity;
-  for (const d of defs) {
-    if (excludeId !== undefined && d.dbId === excludeId) continue;
-    if (line >= d.startLine && line <= d.endLine) {
-      const size = d.endLine - d.startLine;
+  for (const definition of definitions) {
+    if (definition.dbId === excludeId) continue;
+    if (line >= definition.startLine && line <= definition.endLine) {
+      const size = definition.endLine - definition.startLine;
       if (size < bestSize) {
         bestSize = size;
-        best = d;
+        best = definition;
       }
     }
   }
   return best;
 }
 
-function collectFiles(dir: string, root: string, filter: ProjectFilter): string[] {
+function collectFiles(dir: string, filter: ProjectFilter): string[] {
   const results: string[] = [];
   const entries = fs
     .readdirSync(dir, { withFileTypes: true })
     .sort((a, b) => a.name.localeCompare(b.name));
 
   for (const entry of entries) {
-    const filePath = path.join(dir, entry.name);
-    if (entry.isDirectory() && filter.includesDirectory(filePath)) {
-      results.push(...collectFiles(filePath, root, filter));
-    } else if (entry.isFile() && filter.includesFile(filePath)) {
-      results.push(path.relative(root, filePath));
+    const file = path.join(dir, entry.name);
+    if (entry.isDirectory() && filter.includesDirectory(file)) {
+      results.push(...collectFiles(file, filter));
+    } else if (entry.isFile() && filter.includesFile(file)) {
+      results.push(file);
     }
   }
   return results;
 }
 
-/** Re-index a single source file, replacing any existing entries for it. */
-export function reindexFile(rootDir: string, filePath: string): void {
-  const lang = getLanguageForFile(filePath);
-  if (!lang) return;
-
-  try {
-    const source = fs.readFileSync(path.resolve(rootDir, filePath), "utf-8");
-    parser.setLanguage(lang.language);
-    const tree = parser.parse(source);
-
-    deleteByFile(filePath);
-    extractFromTree(tree.rootNode, source, filePath, lang);
-  } catch {
-    // skip files that tree-sitter can't parse
-  }
+interface SourceFile {
+  source: string;
+  stamp: { hash: string };
 }
 
-/** Remove a file's entries from the index. */
-export function removeFile(filePath: string): void {
-  deleteByFile(filePath);
+function readSourceFile(file: string): SourceFile {
+  const source = fs.readFileSync(file, "utf-8");
+  return {
+    source,
+    stamp: { hash: createHash("sha256").update(source).digest("hex") },
+  };
+}
+
+function indexSourceFile(
+  rootId: number,
+  file: string,
+  sourceFile: SourceFile,
+  lang: LoadedLang,
+): { symbols: number; calls: number } {
+  parser.setLanguage(lang.language);
+  const tree = parser.parse(sourceFile.source);
+  let result = { symbols: 0, calls: 0 };
+  replaceFile(rootId, file, sourceFile.stamp, (fileId) => {
+    result = extractFromTree(tree.rootNode, fileId, lang);
+  });
+  return result;
+}
+
+export function reindexFile(rootId: number, file: string): { symbols: number; calls: number } {
+  const lang = getLanguageForFile(file);
+  if (!lang) throw new Error(`unsupported source file: ${file}`);
+  return indexSourceFile(rootId, file, readSourceFile(file), lang);
+}
+
+export function removeFile(file: string): void {
+  deleteFile(file);
 }

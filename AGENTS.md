@@ -1,28 +1,40 @@
 # trace
 
-Deterministic code exploration primitives for Pi — three tools built on tree-sitter + SQLite that answer common navigation questions in one call instead of chains of `rg` + `read`.
+Deterministic, system-wide code exploration primitives for Pi. A required per-user daemon builds a persistent tree-sitter + SQLite index across configured roots and exposes three path-scoped tools over a Unix socket.
 
-- **`def(name)`** — return a function/class/method/type body as one unit, with file path and precise line range.
-- **`callers(name)`** — find every syntactic call site for a symbol via AST traversal. Catches method calls, callbacks, and tagged invocations that `rg` misses, but does not trace variable reassignments or resolve types.
-- **`outline(path)`** — list symbols in a file or directory, with kind and line range. Nested members (e.g. class methods, interface members, inner types) are shown indented under their parents.
+- **`def(name, path?)`** — return a function/class/method/type body as one unit.
+- **`callers(name, path?)`** — find syntactic call sites for a symbol.
+- **`outline(path?)`** — list symbols in a file or directory, including nested members.
+
+Tool paths default to Pi's current working directory, relative paths resolve from it, and absolute paths can target any indexed root.
 
 ## Structure
 
-```
+```text
 trace/
-├── extensions/index.ts    # registers def, callers, outline with Pi
+├── bin/traced.js           # executable daemon launcher
+├── extensions/index.ts     # Pi tools; mandatory IPC client only
 ├── src/
-│   ├── indexer.ts         # walk repo → parse → extract symbols & calls via tag queries
-│   ├── languages.ts       # hardcoded grammar config (TypeScript/TSX, Python, Rust)
-│   ├── db.ts              # SQLite schema + query functions
-│   └── tree-sitter-language.d.ts
-├── tests/test.ts
-└── tsconfig.json
+│   ├── daemon.ts           # daemon process entrypoint
+│   ├── server.ts           # indexing lifecycle, watchers, Unix socket server
+│   ├── client.ts           # one-request-per-connection IPC client
+│   ├── protocol.ts         # request/response types
+│   ├── config.ts           # TRACE_PATH and persistent path configuration
+│   ├── indexer.ts          # walk roots → parse changed files → extract graph
+│   ├── languages.ts        # hardcoded grammar config
+│   ├── project-filter.ts   # nested .gitignore filtering
+│   └── db.ts               # persistent multi-root schema and scoped queries
+├── systemd/traced.service
+└── tests/test.ts
 ```
 
 ## Design
 
-- **tree-sitter** for parsing (syntax trees, not semantics — no LSP, no type resolution)
-- **SQLite** in-memory DB for symbols and calls (graph queries are just JOINs)
-- **File watcher** (chokidar) keeps the index in sync after startup re-index
-- **Structural navigation** — `def`, `callers`, and `outline` operate on a syntax-tree index; use `rg` and `read` for text content, strings, and comments.
+- `TRACE_PATH` is a required path-delimited list of non-overlapping absolute roots.
+- The daemon owns one persistent SQLite database and all chokidar watchers.
+- Files are stored as canonical absolute paths and belong to explicit roots.
+- Every query has a file or directory scope; there is no global fallback search.
+- The extension never indexes locally, starts the daemon, retries, or falls back.
+- Missing daemon, invalid configuration, unindexed scope, and schema mismatch are errors.
+- **tree-sitter** provides syntax, not semantics: callers do not resolve aliases, reassignments, or types.
+- Use `rg` and `read` for text content, strings, and comments.

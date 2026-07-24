@@ -1,24 +1,19 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_LINES,
+  truncateHead,
+  type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import chokidar, { type FSWatcher } from "chokidar";
-import { indexProject, reindexFile, removeFile } from "../src/indexer.ts";
-import { ProjectFilter } from "../src/project-filter.ts";
-import {
-  findDefinition,
-  findCallers,
-  getOutline,
-  getDirOutline,
-  closeDb,
-  openDb,
-  type OutlineSymbol,
-  type DirSymbol,
-} from "../src/db.ts";
+import { requestTrace } from "../src/client.ts";
+import { getTraceSocketPath } from "../src/config.ts";
+import type { DirSymbol, OutlineSymbol } from "../src/db.ts";
 
-// Kinds that represent executable code blocks; we don't descend into their
-// children (avoids showing local arrow functions, etc.)
+const socketPath = getTraceSocketPath();
+
 const FUNCTION_LIKE_KINDS = new Set([
   "function_declaration",
   "function_expression",
@@ -41,278 +36,221 @@ function shortKind(kind: string): string {
 }
 
 function buildSymbolTree(symbols: OutlineSymbol[]): Map<number | null, OutlineSymbol[]> {
-  const map = new Map<number | null, OutlineSymbol[]>();
-  for (const s of symbols) {
-    const key = s.parent_id;
-    if (!map.has(key)) map.set(key, []);
-    map.get(key)!.push(s);
+  const tree = new Map<number | null, OutlineSymbol[]>();
+  for (const symbol of symbols) {
+    const children = tree.get(symbol.parent_id) ?? [];
+    children.push(symbol);
+    tree.set(symbol.parent_id, children);
   }
-  for (const children of map.values()) {
-    children.sort((a, b) => a.start_line - b.start_line);
+  for (const children of tree.values()) {
+    children.sort((left, right) => left.start_line - right.start_line);
   }
-  return map;
+  return tree;
 }
 
 function renderTreeLines(
   tree: Map<number | null, OutlineSymbol[]>,
   parentId: number | null = null,
-  indent: string = "",
+  indent = "",
 ): string[] {
-  const children = tree.get(parentId) ?? [];
   const lines: string[] = [];
-  for (const s of children) {
-    lines.push(`${indent}${s.name} (${shortKind(s.kind)}) — ${s.start_line}-${s.end_line}`);
-    if (!FUNCTION_LIKE_KINDS.has(s.kind)) {
-      lines.push(...renderTreeLines(tree, s.id, indent + "  "));
+  for (const symbol of tree.get(parentId) ?? []) {
+    lines.push(
+      `${indent}${symbol.name} (${shortKind(symbol.kind)}) — ${symbol.start_line}-${symbol.end_line}`,
+    );
+    if (!FUNCTION_LIKE_KINDS.has(symbol.kind)) {
+      lines.push(...renderTreeLines(tree, symbol.id, indent + "  "));
     }
   }
   return lines;
 }
 
+function resolveScope(cwd: string, input?: string): string {
+  return path.resolve(cwd, input ?? ".");
+}
+
+function truncate(text: string): string {
+  const result = truncateHead(text, { maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES });
+  if (!result.truncated) return result.content;
+  return `${result.content}\n\n[Output truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES} bytes. Narrow the path scope.]`;
+}
+
+function pathParameter() {
+  return Type.Optional(
+    Type.String({
+      description:
+        "File or directory to search. Relative paths resolve from the current working directory; defaults to the current working directory.",
+    }),
+  );
+}
+
 export default function (pi: ExtensionAPI) {
-  let watcher: FSWatcher | null = null;
-
   pi.on("session_start", async (_event, ctx) => {
-    openDb();
-    const filter = new ProjectFilter(ctx.cwd);
-    try {
-      const result = indexProject(filter);
-      ctx.ui.notify(
-        `trace: indexed ${result.files} files, ${result.symbols} symbols, ${result.calls} calls (${result.langs.join(", ") || "none"})`,
-        "info",
-      );
-    } catch (err) {
-      ctx.ui.notify(`trace: index failed — ${err}`, "error");
-      return;
-    }
-
-    watcher = chokidar.watch(filter.root, {
-      ignoreInitial: true,
-      followSymlinks: false,
-      ignored: filter.watcherIgnored,
-    });
-
-    const update = (filePath: string) => {
-      if (filter.includesFile(filePath)) {
-        reindexFile(ctx.cwd, path.relative(ctx.cwd, filePath));
-      }
-    };
-    watcher.on("add", update);
-    watcher.on("change", update);
-    watcher.on("unlink", (filePath: string) => {
-      if (filter.includesFile(filePath)) removeFile(path.relative(ctx.cwd, filePath));
-    });
+    await requestTrace(socketPath, { op: "ping", scope: resolveScope(ctx.cwd) });
   });
 
-  pi.on("session_shutdown", async () => {
-    if (watcher) {
-      await watcher.close();
-      watcher = null;
-    }
-    closeDb();
-  });
-
-  // def(name) — get function/class definition
   pi.registerTool({
     name: "def",
     label: "Definition",
     description:
-      "Retrieve the complete source body of a named function, class, method, type, interface, or enum across the project. Returns the full definition with original indentation, plus file path and exact line range. If the name appears in multiple places, all definitions are returned. Optionally narrow the search to a specific file.",
+      "Retrieve complete source bodies of named functions, classes, methods, types, interfaces, or enums from the system-wide trace index. Search is scoped to the supplied file or directory, or the current working directory by default. Returns absolute file paths and exact line ranges.",
     promptSnippet: "Get the full implementation of a named symbol",
     promptGuidelines: [
-      "Use def when you already know the exact symbol name and need its full implementation. Pass the file parameter to disambiguate overloaded names.",
+      "Use def when you know a symbol name and need its implementation. Pass path to search another indexed file, directory, project, or dependency.",
     ],
     parameters: Type.Object({
       name: Type.String({ description: "Name of the symbol to look up" }),
-      file: Type.Optional(
-        Type.String({
-          description: "Optional file path to narrow the search (relative to project root)",
-        }),
-      ),
+      path: pathParameter(),
     }),
-    renderCall(args, theme, _context) {
+    renderCall(args, theme) {
       let text = theme.fg("toolTitle", theme.bold("def "));
       text += theme.fg("accent", args.name);
-      if (args.file) {
-        text += theme.fg("dim", " in " + args.file);
-      }
+      if (args.path) text += theme.fg("dim", " in " + args.path);
       return new Text(text, 0, 0);
     },
-
-    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const results = findDefinition(params.name, params.file);
-      if (results.length === 0) {
-        const scope = params.file ? ` in "${params.file}"` : "";
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const result = await requestTrace(socketPath, {
+        op: "def",
+        name: params.name,
+        scope: resolveScope(ctx.cwd, params.path),
+      });
+      if (result.op !== "def") throw new Error(`unexpected trace response: ${result.op}`);
+      if (result.definitions.length === 0) {
         return {
-          content: [
-            { type: "text" as const, text: `No definition found for "${params.name}"${scope}` },
-          ],
-          details: {} as Record<string, never>,
+          content: [{ type: "text" as const, text: `No definition found for "${params.name}"` }],
+          details: { definitions: result.definitions },
         };
       }
 
       const header =
-        results.length === 1
+        result.definitions.length === 1
           ? `1 definition of "${params.name}":`
-          : `${results.length} definitions of "${params.name}":`;
-
-      const blocks = results.map((r, i) => {
-        const qualName = r.parent_name ? `${r.parent_name}.${r.name}` : r.name;
-        const label =
-          results.length === 1
-            ? `${r.kind} ${qualName} in ${r.file}:${r.start_line}-${r.end_line}`
-            : `${i + 1}. ${r.kind} ${qualName} in ${r.file}:${r.start_line}-${r.end_line}`;
-        // Read actual file lines to ensure correct indentation (tree-sitter body strips
-        // leading whitespace for nested definitions)
-        const filePath = path.resolve(_ctx.cwd, r.file);
-        const fileLines = fs.readFileSync(filePath, "utf-8").split("\n");
-        const lines = fileLines.slice(r.start_line - 1, r.end_line);
-        const numberedBody = lines
-          .map((line, idx) => `${String(r.start_line + idx).padStart(4)} | ${line}`)
+          : `${result.definitions.length} definitions of "${params.name}":`;
+      const blocks = result.definitions.map((definition, index) => {
+        const qualifiedName = definition.parent_name
+          ? `${definition.parent_name}.${definition.name}`
+          : definition.name;
+        const prefix = result.definitions.length === 1 ? "" : `${index + 1}. `;
+        const label = `${prefix}${definition.kind} ${qualifiedName} in ${definition.file}:${definition.start_line}-${definition.end_line}`;
+        const lines = fs.readFileSync(definition.file, "utf-8").split("\n");
+        const body = lines
+          .slice(definition.start_line - 1, definition.end_line)
+          .map(
+            (line, lineIndex) =>
+              `${String(definition.start_line + lineIndex).padStart(4)} | ${line}`,
+          )
           .join("\n");
-        return [label, numberedBody].join("\n");
+        return `${label}\n${body}`;
       });
-
       return {
-        content: [{ type: "text" as const, text: [header, ...blocks].join("\n\n") }],
-        details: { definitions: results },
+        content: [{ type: "text" as const, text: truncate([header, ...blocks].join("\n\n")) }],
+        details: { definitions: result.definitions },
       };
     },
   });
 
-  // callers(name) — find all call sites
   pi.registerTool({
     name: "callers",
     label: "Callers",
     description:
-      "Find every syntactic call site for a named function or method across the project. Returns each invocation with its file path, line number, and the enclosing function or scope where it occurs. Does not trace variable reassignments, import aliases, or resolve types.",
+      "Find syntactic call sites for a function or method in the system-wide trace index. Search is scoped to the supplied file or directory, or the current working directory by default. Returns absolute file paths, line numbers, and enclosing scopes. Does not resolve types, imports, aliases, or variable reassignments.",
     promptSnippet: "Find all invocations of a named function or method",
     promptGuidelines: [
-      "Use callers to trace how a specific function or method is used across the project. It does not follow reassignments, aliases, or resolved types.",
+      "Use callers to find syntactic invocations of a symbol. Pass path to search another indexed file, directory, project, or dependency.",
     ],
     parameters: Type.Object({
       name: Type.String({ description: "Name of the function or method" }),
+      path: pathParameter(),
     }),
-    renderCall(args, theme, _context) {
+    renderCall(args, theme) {
       let text = theme.fg("toolTitle", theme.bold("callers "));
       text += theme.fg("accent", args.name);
+      if (args.path) text += theme.fg("dim", " in " + args.path);
       return new Text(text, 0, 0);
     },
-
-    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const results = findCallers(params.name);
-      if (results.length === 0) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const result = await requestTrace(socketPath, {
+        op: "callers",
+        name: params.name,
+        scope: resolveScope(ctx.cwd, params.path),
+      });
+      if (result.op !== "callers") throw new Error(`unexpected trace response: ${result.op}`);
+      if (result.callers.length === 0) {
         return {
           content: [{ type: "text" as const, text: `No callers found for "${params.name}"` }],
-          details: {} as Record<string, never>,
+          details: { callers: result.callers },
         };
       }
+
       const fileCache = new Map<string, string[]>();
-      const getLines = (file: string): string[] | undefined => {
-        if (fileCache.has(file)) return fileCache.get(file);
-        try {
-          const lines = fs.readFileSync(path.resolve(_ctx.cwd, file), "utf-8").split("\n");
-          fileCache.set(file, lines);
-          return lines;
-        } catch {
-          return undefined;
+      const blocks = result.callers.map((call) => {
+        let lines = fileCache.get(call.file);
+        if (!lines) {
+          lines = fs.readFileSync(call.file, "utf-8").split("\n");
+          fileCache.set(call.file, lines);
         }
-      };
-      const blocks = results.map((c) => {
-        const scope = c.caller_name ? `${c.caller_name} (${c.caller_kind})` : "(top-level)";
-        const fileLines = getLines(c.file);
-        const label = `${c.file}:${c.line} — called in ${scope}`;
-        if (!fileLines) return label;
-        const lines = fileLines.slice(c.line - 1, c.end_line);
-        const numbered = lines
-          .map((line, idx) => `${String(c.line + idx).padStart(4)} | ${line}`)
+        const scope = call.caller_name
+          ? `${call.caller_name} (${call.caller_kind})`
+          : "(top-level)";
+        const label = `${call.file}:${call.line} — called in ${scope}`;
+        const source = lines
+          .slice(call.line - 1, call.end_line)
+          .map((line, lineIndex) => `${String(call.line + lineIndex).padStart(4)} | ${line}`)
           .join("\n");
-        return [label, numbered].join("\n");
+        return `${label}\n${source}`;
       });
       return {
-        content: [{ type: "text" as const, text: blocks.join("\n\n") }],
-        details: { callers: results },
+        content: [{ type: "text" as const, text: truncate(blocks.join("\n\n")) }],
+        details: { callers: result.callers },
       };
     },
   });
 
-  // outline(file) — top-level symbols in a file or directory
   pi.registerTool({
     name: "outline",
     label: "Outline",
     description:
-      "List the symbols defined in a file or directory, such as functions, classes, types, interfaces, and enums. Returns each symbol's name, kind, and line range. Nested members such as class methods, interface members, and inner types are shown indented under their parents.",
-    promptSnippet: "List the structure of a file or directory",
+      "List symbols in a file or directory from the system-wide trace index. The path may be relative to the current working directory or absolute, and defaults to the current working directory. Nested members are indented under their parents.",
+    promptSnippet: "List the structure of an indexed file or directory",
     promptGuidelines: [
-      "Use outline to map an unfamiliar file or directory before deciding which symbols to inspect with def or callers.",
+      "Use outline to map an unfamiliar indexed file or directory before choosing symbols for def or callers.",
     ],
-    parameters: Type.Object({
-      path: Type.String({
-        description: "Path to the file or directory (relative to project root, or absolute)",
-      }),
-    }),
-    renderCall(args, theme, _context) {
-      let text = theme.fg("toolTitle", theme.bold("outline "));
-      text += theme.fg("accent", args.path);
+    parameters: Type.Object({ path: pathParameter() }),
+    renderCall(args, theme) {
+      let text = theme.fg("toolTitle", theme.bold("outline"));
+      if (args.path) text += " " + theme.fg("accent", args.path);
       return new Text(text, 0, 0);
     },
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const scope = resolveScope(ctx.cwd, params.path);
+      const result = await requestTrace(socketPath, { op: "outline", scope });
+      if (result.op !== "outline") throw new Error(`unexpected trace response: ${result.op}`);
+      if (result.symbols.length === 0) {
+        return {
+          content: [{ type: "text" as const, text: `No symbols found in "${scope}"` }],
+          details: { symbols: result.symbols },
+        };
+      }
 
-    async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      const resolved = path.resolve(_ctx.cwd, params.path);
-      const relPath = path.relative(_ctx.cwd, resolved);
-
-      const isDir =
-        (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) || relPath === "";
-
-      if (isDir) {
-        const results = getDirOutline(relPath);
-        if (results.length === 0) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `No symbols found under "${params.path}" (directory not indexed or empty)`,
-              },
-            ],
-            details: {} as Record<string, never>,
-          };
-        }
-
-        const lines: string[] = [];
+      let lines: string[];
+      if (fs.statSync(scope).isFile()) {
+        lines = renderTreeLines(buildSymbolTree(result.symbols));
+      } else {
+        lines = [];
         const byFile = new Map<string, DirSymbol[]>();
-        for (const s of results) {
-          if (!byFile.has(s.file)) byFile.set(s.file, []);
-          byFile.get(s.file)!.push(s);
+        for (const symbol of result.symbols) {
+          const symbols = byFile.get(symbol.file) ?? [];
+          symbols.push(symbol);
+          byFile.set(symbol.file, symbols);
         }
-        for (const [file, fileSymbols] of byFile) {
+        for (const [file, symbols] of byFile) {
           lines.push(`${file}:`);
-          const tree = buildSymbolTree(fileSymbols);
-          lines.push(...renderTreeLines(tree, null, "  "));
+          lines.push(...renderTreeLines(buildSymbolTree(symbols), null, "  "));
         }
-        return {
-          content: [{ type: "text" as const, text: lines.join("\n") }],
-          details: { symbols: results },
-        };
       }
-
-      const results = getOutline(relPath);
-      if (results.length === 0) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `No symbols found in "${params.path}" (not indexed or not a file)`,
-            },
-          ],
-          details: {} as Record<string, never>,
-        };
-      }
-
-      const tree = buildSymbolTree(results);
-      const lines = renderTreeLines(tree);
       return {
-        content: [{ type: "text" as const, text: lines.join("\n") }],
-        details: { symbols: results },
+        content: [{ type: "text" as const, text: truncate(lines.join("\n")) }],
+        details: { symbols: result.symbols },
       };
     },
   });
