@@ -170,8 +170,8 @@ export function isIndexedFile(file: string): boolean {
 export function hasIndexedFileUnder(directory: string): boolean {
   return (
     requireDb()
-      .prepare("SELECT 1 FROM files f WHERE substr(f.path, 1, length(?) + 1) = ? || '/' LIMIT 1")
-      .get(directory, directory) !== undefined
+      .prepare("SELECT 1 FROM files f WHERE f.path GLOB ? || '/*' LIMIT 1")
+      .get(directory) !== undefined
   );
 }
 

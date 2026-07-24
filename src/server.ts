@@ -99,9 +99,6 @@ export class TraceServer {
     watcher.on("add", (file) => reindexFile(root.id, path.resolve(file)));
     watcher.on("change", (file) => reindexFile(root.id, path.resolve(file)));
     watcher.on("unlink", (file) => removeFile(path.resolve(file)));
-    watcher.on("error", (error) => {
-      throw error;
-    });
     await new Promise<void>((resolve) => watcher.once("ready", resolve));
     return watcher;
   }
