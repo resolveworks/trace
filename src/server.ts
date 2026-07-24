@@ -31,8 +31,6 @@ interface IndexedRoot {
 
 class RequestError extends Error {}
 
-const MAX_REQUEST_BYTES = 64 * 1024;
-
 export class TraceServer {
   private readonly socketPath: string;
   private readonly databasePath: string;
@@ -108,30 +106,17 @@ export class TraceServer {
     let input = "";
     socket.on("data", (chunk: string) => {
       input += chunk;
-      if (Buffer.byteLength(input) > MAX_REQUEST_BYTES) {
-        socket.destroy();
-        return;
-      }
       const newline = input.indexOf("\n");
       if (newline === -1) return;
-      const frame = input.slice(0, newline);
 
-      let request: TraceRequest;
+      let response: TraceResponse;
       try {
-        if (input.slice(newline + 1).length > 0) {
-          throw new RequestError("multiple requests on one connection");
-        }
-        request = this.parseRequest(frame);
-        const response: TraceResponse = {
-          ok: true,
-          result: this.execute(request),
-        };
-        socket.end(JSON.stringify(response) + "\n");
+        response = { ok: true, result: this.execute(this.parseRequest(input.slice(0, newline))) };
       } catch (error) {
         if (!(error instanceof RequestError)) throw error;
-        const response: TraceResponse = { ok: false, error: error.message };
-        socket.end(JSON.stringify(response) + "\n");
+        response = { ok: false, error: error.message };
       }
+      socket.end(JSON.stringify(response) + "\n");
     });
   }
 
