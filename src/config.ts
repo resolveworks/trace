@@ -1,24 +1,57 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-export function getTraceRoots(environment: NodeJS.ProcessEnv = process.env): string[] {
-  const configured = environment.TRACE_PATH;
-  if (!configured) throw new Error("TRACE_PATH is required");
+interface TraceConfig {
+  roots?: string[];
+}
 
-  const roots = configured.split(path.delimiter).map((entry) => {
-    if (!entry) throw new Error("TRACE_PATH contains an empty entry");
-    if (!path.isAbsolute(entry)) throw new Error(`TRACE_PATH entries must be absolute: ${entry}`);
+function readTraceConfig(environment: NodeJS.ProcessEnv): TraceConfig {
+  const home = environment.HOME;
+  if (!home) return {};
+  const file = path.join(home, ".pi", "agent", "trace.json");
+  if (!fs.existsSync(file)) return {};
+  const config: unknown = JSON.parse(fs.readFileSync(file, "utf-8"));
+  if (typeof config !== "object" || config === null || Array.isArray(config)) {
+    throw new Error(`${file} must contain a JSON object`);
+  }
+  const { roots } = config as Record<string, unknown>;
+  if (
+    roots !== undefined &&
+    (!Array.isArray(roots) || roots.some((root) => typeof root !== "string"))
+  ) {
+    throw new Error(`${file}: roots must be an array of strings`);
+  }
+  return { roots } as TraceConfig;
+}
+
+function stateDirectory(environment: NodeJS.ProcessEnv): string {
+  const home = environment.HOME;
+  if (!home) throw new Error("HOME is required");
+  return path.join(home, ".pi", "agent", "extensions", "trace");
+}
+
+export function getTraceRoots(environment: NodeJS.ProcessEnv = process.env): string[] {
+  const configured = environment.TRACE_PATH
+    ? environment.TRACE_PATH.split(path.delimiter)
+    : readTraceConfig(environment).roots;
+  if (!configured || configured.length === 0) {
+    throw new Error("trace roots are required: set TRACE_PATH or roots in ~/.pi/agent/trace.json");
+  }
+
+  const roots = configured.map((entry) => {
+    if (!entry) throw new Error("trace roots contain an empty entry");
+    if (!path.isAbsolute(entry)) throw new Error(`trace roots must be absolute: ${entry}`);
     const root = fs.realpathSync(entry);
     if (!fs.statSync(root).isDirectory())
-      throw new Error(`TRACE_PATH entry is not a directory: ${entry}`);
+      throw new Error(`trace root is not a directory: ${entry}`);
     return root;
   });
 
-  if (new Set(roots).size !== roots.length) throw new Error("TRACE_PATH contains duplicate roots");
+  if (new Set(roots).size !== roots.length) throw new Error("trace roots contain duplicates");
   for (let index = 0; index < roots.length; index++) {
     for (let other = index + 1; other < roots.length; other++) {
       if (contains(roots[index], roots[other]) || contains(roots[other], roots[index])) {
-        throw new Error(`TRACE_PATH roots overlap: ${roots[index]} and ${roots[other]}`);
+        throw new Error(`trace roots overlap: ${roots[index]} and ${roots[other]}`);
       }
     }
   }
@@ -27,17 +60,12 @@ export function getTraceRoots(environment: NodeJS.ProcessEnv = process.env): str
 
 export function getTraceSocketPath(environment: NodeJS.ProcessEnv = process.env): string {
   if (environment.TRACE_SOCKET) return path.resolve(environment.TRACE_SOCKET);
-  const runtime = environment.XDG_RUNTIME_DIR;
-  if (!runtime) throw new Error("XDG_RUNTIME_DIR is required when TRACE_SOCKET is not set");
-  return path.join(runtime, "trace", "trace.sock");
+  return path.join(stateDirectory(environment), "trace.sock");
 }
 
 export function getTraceDbPath(environment: NodeJS.ProcessEnv = process.env): string {
   if (environment.TRACE_DB) return path.resolve(environment.TRACE_DB);
-  const home = environment.HOME;
-  if (!home) throw new Error("HOME is required when TRACE_DB is not set");
-  const state = environment.XDG_STATE_HOME ?? path.join(home, ".local", "state");
-  return path.join(state, "trace", "index.sqlite");
+  return path.join(stateDirectory(environment), "index.sqlite");
 }
 
 export function contains(parent: string, child: string): boolean {

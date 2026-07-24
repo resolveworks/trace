@@ -19,7 +19,7 @@ trace/
 │   ├── server.ts           # indexing lifecycle, watchers, Unix socket server
 │   ├── client.ts           # one-request-per-connection IPC client
 │   ├── protocol.ts         # request/response types
-│   ├── config.ts           # TRACE_PATH and persistent path configuration
+│   ├── config.ts           # ~/.pi/agent/trace.json and persistent path configuration
 │   ├── indexer.ts          # walk roots → parse changed files → extract graph
 │   ├── languages.ts        # hardcoded grammar config
 │   ├── project-filter.ts   # nested .gitignore filtering
@@ -30,7 +30,7 @@ trace/
 
 ## Design
 
-- `TRACE_PATH` is a required path-delimited list of non-overlapping absolute roots.
+- Roots are configured in `~/.pi/agent/trace.json` (or `TRACE_PATH`): a list of non-overlapping absolute directories.
 - The daemon owns one persistent SQLite database and all chokidar watchers.
 - Files are stored as canonical absolute paths and belong to explicit roots.
 - Every query has a file or directory scope; there is no global fallback search.

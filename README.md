@@ -6,18 +6,18 @@ Deterministic, system-wide code navigation for [Pi](https://pi.dev). A persisten
 - **`callers(name, path?)`** — find syntactic call sites for a symbol.
 - **`outline(path?)`** — list symbols in a file or directory, including nested members.
 
-Every tool uses Pi's current working directory when `path` is omitted. A relative path resolves from that directory; an absolute path can target any file or directory below `TRACE_PATH`. There is no global unscoped symbol search.
+Every tool uses Pi's current working directory when `path` is omitted. A relative path resolves from that directory; an absolute path can target any file or directory below a configured root. There is no global unscoped symbol search.
 
 ## Architecture
 
 `traced` is a required per-user daemon. It owns:
 
-- one persistent SQLite database at `$XDG_STATE_HOME/trace/index.sqlite` (or `~/.local/state/trace/index.sqlite`),
-- one index namespace spanning all roots in `TRACE_PATH`,
+- one persistent SQLite database at `~/.pi/agent/extensions/trace/index.sqlite`,
+- one index namespace spanning all configured roots,
 - the tree-sitter parsers and filesystem watchers, and
-- a Unix socket at `$XDG_RUNTIME_DIR/trace/trace.sock`.
+- a Unix socket at `~/.pi/agent/extensions/trace/trace.sock`.
 
-The Pi extension is only an IPC client. It does not create an in-memory index, start the daemon, retry failed requests, or fall back to project-local behavior. A missing daemon, invalid scope, or invalid `TRACE_PATH` is an error. The database has no schema versioning: after a schema change, delete it and let the daemon rebuild on startup.
+The Pi extension is only an IPC client. It does not create an in-memory index, start the daemon, retry failed requests, or fall back to project-local behavior. A missing daemon, invalid scope, or invalid root configuration is an error. The database has no schema versioning: after a schema change, delete it and let the daemon rebuild on startup.
 
 Files and results use canonical absolute paths. Initial daemon startup hashes source files and only reparses changed content. Source changes are indexed by chokidar using the same nested `.gitignore` rules as the initial walk.
 
@@ -25,30 +25,29 @@ Currently supported languages: TypeScript/TSX, Python, and Rust.
 
 ## Configuration
 
-`TRACE_PATH` is required by the daemon. It is a colon-separated list on Unix, like `PATH`:
+The daemon reads `~/.pi/agent/trace.json`. Only `roots` is required:
 
-```sh
-TRACE_PATH=/home/me/projects:/home/me/.local/share/pnpm/store
+```json
+{
+  "roots": ["/home/me/projects", "/home/me/.local/share/pnpm/store"]
+}
 ```
 
 Entries must be existing absolute directories. Duplicate or overlapping roots are rejected. Broad roots may contain multiple nested repositories; nested `.gitignore` files are honored.
 
-The following optional variables override the standard locations:
-
-```sh
-TRACE_DB=/absolute/path/to/index.sqlite
-TRACE_SOCKET=/absolute/path/to/trace.sock
-```
+The socket and database always live under `~/.pi/agent/extensions/trace/`. The environment variables `TRACE_PATH` (colon-separated, like `PATH`), `TRACE_SOCKET`, and `TRACE_DB` override all configuration for tests and development daemons.
 
 ## Running with systemd
 
-Install the package so `traced` is on the service's deterministic pnpm path, then create the daemon environment:
+Install the package so `traced` is on the service's deterministic pnpm path, then configure the daemon roots:
 
 ```sh
 pnpm link --global
-mkdir -p ~/.config/trace ~/.config/systemd/user
-cat > ~/.config/trace/environment <<'EOF'
-TRACE_PATH=/home/me/projects:/home/me/.local/share/pnpm/store
+mkdir -p ~/.pi/agent ~/.config/systemd/user
+cat > ~/.pi/agent/trace.json <<'EOF'
+{
+  "roots": ["/home/me/projects", "/home/me/.local/share/pnpm/store"]
+}
 EOF
 cp systemd/traced.service ~/.config/systemd/user/
 systemctl --user daemon-reload
