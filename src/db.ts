@@ -60,29 +60,20 @@ export function closeDb(): void {
 }
 
 function createSchema(database: DatabaseType): void {
-  const version = database.pragma("user_version", { simple: true }) as number;
-  if (version === 1) return;
-  if (version !== 0) throw new Error(`unsupported trace database schema version ${version}`);
-
-  const tables = database
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
-    .all();
-  if (tables.length > 0) throw new Error("trace database has an unversioned schema");
-
   database.exec(`
-    CREATE TABLE roots (
+    CREATE TABLE IF NOT EXISTS roots (
       id INTEGER PRIMARY KEY,
       path TEXT NOT NULL UNIQUE
     );
 
-    CREATE TABLE files (
+    CREATE TABLE IF NOT EXISTS files (
       id INTEGER PRIMARY KEY,
       root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
       path TEXT NOT NULL UNIQUE,
       hash TEXT NOT NULL
     );
 
-    CREATE TABLE symbols (
+    CREATE TABLE IF NOT EXISTS symbols (
       id INTEGER PRIMARY KEY,
       file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
@@ -92,7 +83,7 @@ function createSchema(database: DatabaseType): void {
       parent_id INTEGER REFERENCES symbols(id) ON DELETE CASCADE
     );
 
-    CREATE TABLE calls (
+    CREATE TABLE IF NOT EXISTS calls (
       id INTEGER PRIMARY KEY,
       file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
       caller_id INTEGER REFERENCES symbols(id) ON DELETE CASCADE,
@@ -101,13 +92,11 @@ function createSchema(database: DatabaseType): void {
       end_line INTEGER NOT NULL
     );
 
-    CREATE INDEX idx_files_root ON files(root_id);
-    CREATE INDEX idx_symbols_name ON symbols(name);
-    CREATE INDEX idx_symbols_file ON symbols(file_id);
-    CREATE INDEX idx_calls_callee ON calls(callee_name);
-    CREATE INDEX idx_calls_file ON calls(file_id);
-
-    PRAGMA user_version = 1;
+    CREATE INDEX IF NOT EXISTS idx_files_root ON files(root_id);
+    CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
+    CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
+    CREATE INDEX IF NOT EXISTS idx_calls_callee ON calls(callee_name);
+    CREATE INDEX IF NOT EXISTS idx_calls_file ON calls(file_id);
   `);
 }
 

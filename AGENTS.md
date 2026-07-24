@@ -35,6 +35,6 @@ trace/
 - Files are stored as canonical absolute paths and belong to explicit roots.
 - Every query has a file or directory scope; there is no global fallback search.
 - The extension never indexes locally, starts the daemon, retries, or falls back.
-- Missing daemon, invalid configuration, unindexed scope, and schema mismatch are errors.
+- Missing daemon, invalid configuration, and unindexed scope are errors.
 - **tree-sitter** provides syntax, not semantics: callers do not resolve aliases, reassignments, or types.
 - Use `rg` and `read` for text content, strings, and comments.

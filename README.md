@@ -17,7 +17,7 @@ Every tool uses Pi's current working directory when `path` is omitted. A relativ
 - the tree-sitter parsers and filesystem watchers, and
 - a Unix socket at `$XDG_RUNTIME_DIR/trace/trace.sock`.
 
-The Pi extension is only an IPC client. It does not create an in-memory index, start the daemon, retry failed requests, or fall back to project-local behavior. A missing daemon, invalid scope, unsupported database schema, or invalid `TRACE_PATH` is an error.
+The Pi extension is only an IPC client. It does not create an in-memory index, start the daemon, retry failed requests, or fall back to project-local behavior. A missing daemon, invalid scope, or invalid `TRACE_PATH` is an error. The database has no schema versioning: after a schema change, delete it and let the daemon rebuild on startup.
 
 Files and results use canonical absolute paths. Initial daemon startup hashes source files and only reparses changed content. Source changes are indexed by chokidar using the same nested `.gitignore` rules as the initial walk.
 
