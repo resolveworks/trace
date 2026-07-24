@@ -83,17 +83,6 @@ function pathParameter() {
 }
 
 export default function (pi: ExtensionAPI) {
-  pi.on("session_start", async (_event, ctx) => {
-    try {
-      await requestTrace(getTraceSocketPath(), { op: "ping", scope: resolveScope(ctx.cwd) });
-    } catch (error) {
-      ctx.ui.notify(
-        `trace daemon is unreachable; tools will fail: ${(error as Error).message}`,
-        "error",
-      );
-    }
-  });
-
   pi.registerTool({
     name: "def",
     label: "Definition",

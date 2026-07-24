@@ -131,8 +131,8 @@ try {
   const server = new TraceServer(environment);
   await server.start();
   try {
-    const ping = await requestTrace(socket, { op: "ping", scope: childA });
-    assert(ping.op === "ping", "daemon accepts an indexed subdirectory scope");
+    const outline = await requestTrace(socket, { op: "outline", scope: childA });
+    assert(outline.op === "outline", "daemon accepts an indexed subdirectory scope");
 
     const definition = await requestTrace(socket, {
       op: "def",
@@ -154,12 +154,12 @@ try {
     );
 
     await rejects(
-      () => requestTrace(socket, { op: "ping", scope: ignoredFile }),
+      () => requestTrace(socket, { op: "outline", scope: ignoredFile }),
       /file is not indexed/,
       "ignored file fails as an unindexed scope",
     );
     await rejects(
-      () => requestTrace(socket, { op: "ping", scope: temporary }),
+      () => requestTrace(socket, { op: "outline", scope: temporary }),
       /outside TRACE_PATH/,
       "scope outside configured roots fails",
     );
@@ -189,7 +189,7 @@ try {
   }
 
   await rejects(
-    () => requestTrace(socket, { op: "ping", scope: rootA }),
+    () => requestTrace(socket, { op: "outline", scope: rootA }),
     /ENOENT|ECONNREFUSED/,
     "daemon unavailability is a hard client error",
   );

@@ -155,8 +155,6 @@ export class TraceServer {
   private execute(request: TraceRequest): TraceResult {
     const scope = this.resolveScope(request.scope);
     switch (request.op) {
-      case "ping":
-        return { op: "ping" };
       case "def":
         return { op: "def", definitions: findDefinition(request.name, scope) };
       case "callers":
