@@ -38,10 +38,6 @@ export interface DirSymbol extends OutlineSymbol {
   file: string;
 }
 
-export interface FileStamp {
-  hash: string;
-}
-
 let db: DatabaseType | null = null;
 
 function requireDb(): DatabaseType {
@@ -140,17 +136,17 @@ export function syncRoots(paths: string[]): Map<string, number> {
   return sync();
 }
 
-export function getIndexedFiles(rootId: number): Map<string, FileStamp> {
+export function getIndexedFiles(rootId: number): Map<string, string> {
   const rows = requireDb()
     .prepare("SELECT path, hash FROM files WHERE root_id = ?")
     .all(rootId) as { path: string; hash: string }[];
-  return new Map(rows.map((row) => [row.path, { hash: row.hash }]));
+  return new Map(rows.map((row) => [row.path, row.hash]));
 }
 
 export function replaceFile(
   rootId: number,
   file: string,
-  stamp: FileStamp,
+  hash: string,
   extract: (fileId: number) => void,
 ): void {
   const database = requireDb();
@@ -158,7 +154,7 @@ export function replaceFile(
     database.prepare("DELETE FROM files WHERE path = ?").run(file);
     const result = database
       .prepare("INSERT INTO files(root_id, path, hash) VALUES (?, ?, ?)")
-      .run(rootId, file, stamp.hash);
+      .run(rootId, file, hash);
     extract(Number(result.lastInsertRowid));
   })();
 }
@@ -213,7 +209,7 @@ export function insertCall(
     .run(fileId, callerId, calleeName, line, endLine);
 }
 
-const IN_SCOPE = "(f.path = ? OR substr(f.path, 1, length(?) + 1) = ? || '/')";
+const IN_SCOPE = "(f.path = ? OR f.path GLOB ? || '/*')";
 
 export function findDefinition(name: string, scope: string): Definition[] {
   const rows = requireDb()
@@ -226,7 +222,7 @@ export function findDefinition(name: string, scope: string): Definition[] {
        WHERE s.name = ? AND ${IN_SCOPE}
        ORDER BY length(f.path), f.path, s.start_line`,
     )
-    .all(name, scope, scope, scope) as Record<string, unknown>[];
+    .all(name, scope, scope) as Record<string, unknown>[];
   return rows.map((row) => ({
     id: row.id as number,
     name: row.name as string,
@@ -251,7 +247,7 @@ export function findCallers(name: string, scope: string): CallSite[] {
        WHERE c.callee_name = ? AND ${IN_SCOPE}
        ORDER BY length(f.path), f.path, c.line`,
     )
-    .all(name, scope, scope, scope) as Record<string, unknown>[];
+    .all(name, scope, scope) as Record<string, unknown>[];
   return rows.map((row) => ({
     caller_name: (row.caller_name as string | null) ?? null,
     caller_kind: (row.caller_kind as string | null) ?? null,
@@ -271,7 +267,7 @@ export function getOutline(scope: string): DirSymbol[] {
        WHERE ${IN_SCOPE}
        ORDER BY f.path, s.start_line`,
     )
-    .all(scope, scope, scope) as Record<string, unknown>[];
+    .all(scope, scope) as Record<string, unknown>[];
   return rows.map((row) => ({
     file: row.file as string,
     id: row.id as number,

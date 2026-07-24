@@ -39,7 +39,7 @@ export function indexRoot(rootId: number, filter: ProjectFilter): IndexResult {
     langs.add(lang.name);
     const sourceFile = readSourceFile(file);
     const previous = indexed.get(file);
-    if (previous?.hash === sourceFile.stamp.hash) continue;
+    if (previous === sourceFile.hash) continue;
 
     const result = indexSourceFile(rootId, file, sourceFile, lang);
     changed++;
@@ -164,14 +164,14 @@ function collectFiles(dir: string, filter: ProjectFilter): string[] {
 
 interface SourceFile {
   source: string;
-  stamp: { hash: string };
+  hash: string;
 }
 
 function readSourceFile(file: string): SourceFile {
   const source = fs.readFileSync(file, "utf-8");
   return {
     source,
-    stamp: { hash: createHash("sha256").update(source).digest("hex") },
+    hash: createHash("sha256").update(source).digest("hex"),
   };
 }
 
@@ -184,7 +184,7 @@ function indexSourceFile(
   parser.setLanguage(lang.language);
   const tree = parser.parse(sourceFile.source);
   let result = { symbols: 0, calls: 0 };
-  replaceFile(rootId, file, sourceFile.stamp, (fileId) => {
+  replaceFile(rootId, file, sourceFile.hash, (fileId) => {
     result = extractFromTree(tree.rootNode, fileId, lang);
   });
   return result;

@@ -12,8 +12,6 @@ import { requestTrace } from "../src/client.ts";
 import { getTraceSocketPath } from "../src/config.ts";
 import type { DirSymbol, OutlineSymbol } from "../src/db.ts";
 
-const socketPath = getTraceSocketPath();
-
 const FUNCTION_LIKE_KINDS = new Set([
   "function_declaration",
   "function_expression",
@@ -86,7 +84,14 @@ function pathParameter() {
 
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
-    await requestTrace(socketPath, { op: "ping", scope: resolveScope(ctx.cwd) });
+    try {
+      await requestTrace(getTraceSocketPath(), { op: "ping", scope: resolveScope(ctx.cwd) });
+    } catch (error) {
+      ctx.ui.notify(
+        `trace daemon is unreachable; tools will fail: ${(error as Error).message}`,
+        "error",
+      );
+    }
   });
 
   pi.registerTool({
@@ -109,7 +114,7 @@ export default function (pi: ExtensionAPI) {
       return new Text(text, 0, 0);
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const result = await requestTrace(socketPath, {
+      const result = await requestTrace(getTraceSocketPath(), {
         op: "def",
         name: params.name,
         scope: resolveScope(ctx.cwd, params.path),
@@ -169,7 +174,7 @@ export default function (pi: ExtensionAPI) {
       return new Text(text, 0, 0);
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const result = await requestTrace(socketPath, {
+      const result = await requestTrace(getTraceSocketPath(), {
         op: "callers",
         name: params.name,
         scope: resolveScope(ctx.cwd, params.path),
@@ -223,7 +228,7 @@ export default function (pi: ExtensionAPI) {
     },
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const scope = resolveScope(ctx.cwd, params.path);
-      const result = await requestTrace(socketPath, { op: "outline", scope });
+      const result = await requestTrace(getTraceSocketPath(), { op: "outline", scope });
       if (result.op !== "outline") throw new Error(`unexpected trace response: ${result.op}`);
       if (result.symbols.length === 0) {
         return {
