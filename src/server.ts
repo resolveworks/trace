@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
+import { Value } from "typebox/value";
 import { getTraceDbPath, getTraceRoots, getTraceSocketPath, contains } from "./config.ts";
 import {
   closeDb,
@@ -15,7 +16,12 @@ import {
 } from "./db.ts";
 import { indexRoot, reindexFile, removeFile } from "./indexer.ts";
 import { ProjectFilter } from "./project-filter.ts";
-import type { TraceRequest, TraceResponse, TraceResult } from "./protocol.ts";
+import {
+  TraceRequestSchema,
+  type TraceRequest,
+  type TraceResponse,
+  type TraceResult,
+} from "./protocol.ts";
 
 interface IndexedRoot {
   id: number;
@@ -139,16 +145,11 @@ export class TraceServer {
     } catch {
       throw new RequestError("invalid JSON request");
     }
-    if (!value || typeof value !== "object") throw new RequestError("request must be an object");
-    const request = value as Record<string, unknown>;
-    if (typeof request.scope !== "string") throw new RequestError("request.scope must be a string");
-    if (!(["ping", "def", "callers", "outline"] as unknown[]).includes(request.op)) {
-      throw new RequestError("unknown request operation");
+    if (!Value.Check(TraceRequestSchema, value)) {
+      const error = Value.Errors(TraceRequestSchema, value)[0];
+      throw new RequestError(`invalid request: ${error?.message ?? "schema validation failed"}`);
     }
-    if ((request.op === "def" || request.op === "callers") && typeof request.name !== "string") {
-      throw new RequestError(`request.name is required for ${request.op}`);
-    }
-    return request as unknown as TraceRequest;
+    return value;
   }
 
   private execute(request: TraceRequest): TraceResult {

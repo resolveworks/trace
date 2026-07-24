@@ -1,10 +1,14 @@
+import { Type, type Static } from "typebox";
 import type { CallSite, Definition, DirSymbol } from "./db.ts";
 
-export type TraceRequest =
-  | { op: "ping"; scope: string }
-  | { op: "def"; scope: string; name: string }
-  | { op: "callers"; scope: string; name: string }
-  | { op: "outline"; scope: string };
+export const TraceRequestSchema = Type.Union([
+  Type.Object({ op: Type.Literal("ping"), scope: Type.String() }),
+  Type.Object({ op: Type.Literal("def"), scope: Type.String(), name: Type.String() }),
+  Type.Object({ op: Type.Literal("callers"), scope: Type.String(), name: Type.String() }),
+  Type.Object({ op: Type.Literal("outline"), scope: Type.String() }),
+]);
+
+export type TraceRequest = Static<typeof TraceRequestSchema>;
 
 export type TraceResult =
   | { op: "ping" }
