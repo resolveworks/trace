@@ -6,6 +6,25 @@ Deterministic code navigation for [Pi](https://pi.dev) — three tools built on 
 - **`callers(name)`** — find every syntactic call site for a symbol via AST traversal.
 - **`outline(path)`** — list symbols in a file or directory, with kind and line range. Nested members (e.g. class methods, interface members, inner types) are shown indented under their parents.
 
+## Development
+
+Requires Node.js 20.19 or newer and pnpm 11.3.0 (pinned in `package.json`).
+
+> **Temporary:** `tree-sitter` resolves from `../node-tree-sitter` until current upstream releases are published again. Check out that repository beside this one before installing.
+
+```bash
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm test
+pnpm format:check
+```
+
+Try the extension locally without installing it:
+
+```bash
+pnpm exec pi -e .
+```
+
 ## How it works
 
 1. **Indexer** (`src/indexer.ts`) walks the repo, parses files, and extracts symbols & calls via tree-sitter tag queries.
