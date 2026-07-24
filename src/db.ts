@@ -73,7 +73,7 @@ function createSchema(db: DatabaseType): void {
 
 export function clearAll(): void {
   if (!db) return;
-  db.exec("DELETE FROM symbols; DELETE FROM calls;");
+  db.exec("DELETE FROM calls; DELETE FROM symbols;");
 }
 
 export function deleteByFile(file: string): void {

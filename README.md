@@ -29,7 +29,7 @@ pnpm exec pi -e .
 
 1. **Indexer** (`src/indexer.ts`) walks the repo, parses files, and extracts symbols & calls via tree-sitter tag queries.
 2. **Database** (`src/db.ts`) stores the graph in SQLite (in-memory), so structural queries are just JOINs.
-3. **File watcher** (chokidar) keeps the index in sync after the initial startup re-index.
+3. **File watcher** (chokidar) keeps the index in sync using the same `.gitignore` rules as the initial crawl.
 
 Currently supported languages: TypeScript/TSX, Python, Rust.
 
