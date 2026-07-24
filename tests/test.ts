@@ -1,13 +1,15 @@
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { once } from "node:events";
 import * as fs from "node:fs";
-import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { requestTrace } from "../src/client.ts";
-import { closeDb, findCallers, findDefinition, getOutline, openDb, syncRoots } from "../src/db.ts";
-import { indexRoot, initializeIndexer } from "../src/indexer.ts";
-import { byExtension } from "../src/languages.ts";
-import { ProjectFilter } from "../src/project-filter.ts";
-import { TraceServer } from "../src/server.ts";
+import type {
+  AgentToolResult,
+  ExtensionAPI,
+  ExtensionContext,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
+import traceExtension from "../extensions/index.ts";
 
 let passed = 0;
 let failed = 0;
@@ -34,9 +36,13 @@ async function rejects(action: () => Promise<unknown>, pattern: RegExp, message:
 async function eventually(action: () => Promise<boolean>, message: string): Promise<void> {
   const deadline = Date.now() + 3_000;
   while (Date.now() < deadline) {
-    if (await action()) {
-      assert(true, message);
-      return;
+    try {
+      if (await action()) {
+        assert(true, message);
+        return;
+      }
+    } catch {
+      // Queries can fail while a filesystem event is still in flight.
     }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
@@ -50,172 +56,204 @@ function write(root: string, file: string, content: string): string {
   return target;
 }
 
-await initializeIndexer();
+const tools = new Map<string, ToolDefinition>();
+traceExtension({
+  registerTool(tool: ToolDefinition) {
+    tools.set(tool.name, tool);
+  },
+} as unknown as ExtensionAPI);
 
-console.log("Grammars...");
-const languages = [...new Set([...byExtension.values()].map((language) => language.name))];
-assert(languages.includes("typescript"), "typescript grammar");
-assert(languages.includes("python"), "python grammar");
-assert(languages.includes("rust"), "rust grammar");
+async function executeTool(
+  name: string,
+  params: Record<string, unknown>,
+  cwd: string,
+): Promise<AgentToolResult<unknown>> {
+  const tool = tools.get(name);
+  if (!tool) throw new Error(`tool was not registered: ${name}`);
+  return tool.execute("test-call", params, undefined, undefined, {
+    cwd,
+  } as unknown as ExtensionContext);
+}
+
+function resultText(result: AgentToolResult<unknown>): string {
+  return result.content
+    .map((item) => (item.type === "text" ? item.text : ""))
+    .filter(Boolean)
+    .join("\n");
+}
+
+let daemonLog = "";
+
+async function startDaemon(socket: string): Promise<ChildProcessWithoutNullStreams> {
+  const daemon = spawn(process.execPath, [path.resolve("src/daemon.ts")], {
+    env: process.env,
+    stdio: "pipe",
+  });
+  daemon.stdout.setEncoding("utf-8");
+  daemon.stderr.setEncoding("utf-8");
+  daemon.stdout.on("data", (chunk: string) => (daemonLog += chunk));
+  daemon.stderr.on("data", (chunk: string) => (daemonLog += chunk));
+
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(socket)) return daemon;
+    if (daemon.exitCode !== null || daemon.signalCode !== null) {
+      throw new Error(`daemon exited during startup:\n${daemonLog}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  daemon.kill("SIGKILL");
+  throw new Error(`daemon did not start:\n${daemonLog}`);
+}
+
+async function stopDaemon(daemon: ChildProcessWithoutNullStreams): Promise<void> {
+  if (daemon.exitCode !== null || daemon.signalCode !== null) return;
+  const exited = once(daemon, "exit");
+  daemon.kill("SIGTERM");
+  const force = setTimeout(() => daemon.kill("SIGKILL"), 3_000);
+  await exited;
+  clearTimeout(force);
+}
 
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "trace-test-"));
-const rootA = path.join(temporary, "root-a");
-const rootB = path.join(temporary, "root-b");
-const childA = path.join(rootA, "src");
-const database = path.join(temporary, "index.sqlite");
-const socket = path.join(temporary, "trace.sock");
-fs.mkdirSync(rootA);
-fs.mkdirSync(rootB);
+const home = path.join(temporary, "home");
+const rootA = path.join(home, "workspace", "root-a");
+const rootB = path.join(home, "workspace", "root-b");
+const configDirectory = path.join(home, ".pi", "agent");
+const socket = path.join(configDirectory, "extensions", "trace", "trace.sock");
+const originalEnvironment = {
+  HOME: process.env.HOME,
+  TRACE_PATH: process.env.TRACE_PATH,
+  TRACE_DB: process.env.TRACE_DB,
+  TRACE_SOCKET: process.env.TRACE_SOCKET,
+};
 
-const aSource = write(
+fs.mkdirSync(rootA, { recursive: true });
+fs.mkdirSync(rootB, { recursive: true });
+const source = write(
   rootA,
   "src/a.ts",
   [
-    "export function shared(): number {",
-    "  return 1;",
+    "export function target(value: number): number {",
+    "  return value + 1;",
     "}",
     "",
-    "export function useShared(): number {",
-    "  return shared();",
+    "export class Counter {",
+    "  increment(value: number): number {",
+    "    return target(value);",
+    "  }",
     "}",
     "",
   ].join("\n"),
 );
-write(rootA, "empty.py", "# indexed, with no symbols\n");
-write(rootA, ".gitignore", "ignored.py\nignored-dir/\n");
-const ignoredFile = write(rootA, "ignored.py", "def ignored_symbol():\n    pass\n");
-write(rootA, "ignored-dir/dependency.ts", "export function ignoredDependency() {}\n");
-write(rootB, "b.ts", "export function shared(): number { return 2; }\n");
+const empty = write(rootA, "empty.ts", "// indexed, with no symbols\n");
+write(rootA, ".gitignore", "ignored.ts\n");
+const ignored = write(rootA, "ignored.ts", "export function ignoredSymbol() {}\n");
+write(rootB, "b.ts", "export function target(): number { return 2; }\n");
+fs.mkdirSync(configDirectory, { recursive: true });
+fs.writeFileSync(
+  path.join(configDirectory, "trace.json"),
+  JSON.stringify({ roots: [rootA, rootB] }),
+);
 
+process.env.HOME = home;
+delete process.env.TRACE_PATH;
+delete process.env.TRACE_DB;
+delete process.env.TRACE_SOCKET;
+
+let daemon: ChildProcessWithoutNullStreams | null = null;
 try {
-  console.log("\nPersistent multi-root index...");
-  openDb(database);
-  let rootIds = syncRoots([rootA, rootB]);
-  const resultA = indexRoot(rootIds.get(rootA)!, new ProjectFilter(rootA));
-  const resultB = indexRoot(rootIds.get(rootB)!, new ProjectFilter(rootB));
-  assert(resultA.files === 2, "gitignored files are excluded");
-  assert(resultB.files === 1, "second root is indexed independently");
-  assert(findDefinition("shared", rootA).length === 1, "definition is scoped to first root");
-  assert(findDefinition("shared", rootB).length === 1, "definition is scoped to second root");
-  assert(findDefinition("shared", temporary).length === 2, "directory scope uses path boundaries");
-  assert(findDefinition("shared", aSource).length === 1, "file scope is exact");
-  assert(findDefinition("ignored_symbol", rootA).length === 0, "ignored definition is absent");
-  assert(findCallers("shared", rootA).length === 1, "callers are scope constrained");
+  daemon = await startDaemon(socket);
+
+  console.log("Core tool contract...");
+  const definition = await executeTool("def", { name: "target" }, rootA);
+  const expectedDefinition = [
+    '1 definition of "target":',
+    "",
+    `function_declaration target in ${source}:1-3`,
+    "   1 | export function target(value: number): number {",
+    "   2 |   return value + 1;",
+    "   3 | }",
+  ].join("\n");
   assert(
-    getOutline(aSource).some((symbol) => symbol.name === "useShared"),
-    "file outline",
+    resultText(definition) === expectedDefinition &&
+      (definition.details as { definitions: unknown[] }).definitions.length === 1,
+    "def uses cwd scope and returns the complete body",
   );
-  assert(getOutline(childA).length > 0, "directory outline");
 
-  closeDb();
-  openDb(database);
-  rootIds = syncRoots([rootA, rootB]);
-  const unchanged = indexRoot(rootIds.get(rootA)!, new ProjectFilter(rootA));
-  assert(unchanged.changed === 0, "persistent index skips unchanged files after restart");
-  assert(findDefinition("shared", rootA).length === 1, "persistent definitions survive restart");
-
-  const preservedTimes = fs.statSync(aSource);
-  fs.writeFileSync(aSource, fs.readFileSync(aSource, "utf-8").replace("return 1", "return 3"));
-  fs.utimesSync(aSource, preservedTimes.atime, preservedTimes.mtime);
-  closeDb();
-  openDb(database);
-  rootIds = syncRoots([rootA, rootB]);
-  const sameStampChange = indexRoot(rootIds.get(rootA)!, new ProjectFilter(rootA));
-  assert(sameStampChange.changed === 1, "content hash detects same-size, same-mtime changes");
-  closeDb();
-
-  console.log("\nDaemon protocol...");
-  write(
-    rootA,
-    "many/many.ts",
-    Array.from({ length: 20000 }, (_, index) => `export function many${index}() {}\n`).join(""),
+  const callers = await executeTool("callers", { name: "target", path: "src/a.ts" }, rootA);
+  assert(
+    resultText(callers) ===
+      `${source}:7 — called in increment (method_definition)\n   7 |     return target(value);`,
+    "callers resolves a relative path and reports source context",
   );
-  const environment = {
-    ...process.env,
-    TRACE_PATH: `${rootA}${path.delimiter}${rootB}`,
-    TRACE_DB: database,
-    TRACE_SOCKET: socket,
-  };
-  const server = new TraceServer(environment);
-  await server.start();
-  try {
-    const outline = await requestTrace(socket, { op: "outline", scope: childA });
-    assert(outline.symbols.length === 2, "daemon accepts an indexed subdirectory scope");
 
-    const definition = await requestTrace(socket, {
-      op: "def",
-      name: "shared",
-      scope: rootB,
-    });
-    assert(definition.definitions.length === 1, "daemon query stays within explicit root");
+  const outline = await executeTool("outline", { path: path.dirname(source) }, rootB);
+  assert(
+    resultText(outline) ===
+      [
+        `${source}:`,
+        "  target (function) — 1-3",
+        "  Counter (class) — 5-9",
+        "    increment (method) — 6-8",
+      ].join("\n"),
+    "outline accepts an absolute directory and renders nested symbols",
+  );
 
-    const emptyOutline = await requestTrace(socket, {
-      op: "outline",
-      scope: path.join(rootA, "empty.py"),
-    });
-    assert(
-      emptyOutline.symbols.length === 0,
-      "indexed file with no symbols is a valid empty result",
+  console.log("\nFilesystem lifecycle...");
+  const changing = path.join(rootA, "changing.ts");
+  fs.writeFileSync(changing, "export function addedSymbol() {}\n");
+  await eventually(async () => {
+    const result = await executeTool("def", { name: "addedSymbol" }, rootA);
+    return resultText(result).includes("function_declaration addedSymbol");
+  }, "watcher exposes an added symbol");
+
+  fs.writeFileSync(changing, "export function changedSymbol() {}\n");
+  await eventually(async () => {
+    const oldResult = await executeTool("def", { name: "addedSymbol" }, rootA);
+    const newResult = await executeTool("def", { name: "changedSymbol" }, rootA);
+    return (
+      resultText(oldResult) === 'No definition found for "addedSymbol"' &&
+      resultText(newResult).includes("function_declaration changedSymbol")
     );
+  }, "watcher replaces changed symbols");
 
-    await rejects(
-      () => requestTrace(socket, { op: "outline", scope: ignoredFile }),
-      /file is not indexed/,
-      "ignored file fails as an unindexed scope",
-    );
-    await rejects(
-      () => requestTrace(socket, { op: "outline", scope: temporary }),
-      /outside TRACE_PATH/,
-      "scope outside configured roots fails",
-    );
+  fs.unlinkSync(changing);
+  await eventually(async () => {
+    const result = await executeTool("def", { name: "changedSymbol" }, rootA);
+    return resultText(result) === 'No definition found for "changedSymbol"';
+  }, "watcher removes deleted symbols");
 
-    const added = path.join(rootA, "src", "added.ts");
-    write(rootA, "src/added.ts", "export function watchedSymbol() {}\n");
-    await eventually(async () => {
-      const response = await requestTrace(socket, {
-        op: "def",
-        name: "watchedSymbol",
-        scope: rootA,
-      });
-      return response.definitions.length === 1;
-    }, "watcher indexes added source files");
-
-    fs.unlinkSync(added);
-    await eventually(async () => {
-      const response = await requestTrace(socket, {
-        op: "def",
-        name: "watchedSymbol",
-        scope: rootA,
-      });
-      return response.definitions.length === 0;
-    }, "watcher removes deleted source files");
-
-    const abandoned = net.createConnection(socket);
-    abandoned.on("connect", () => {
-      const request = JSON.stringify({ op: "outline", scope: path.join(rootA, "many", "many.ts") });
-      abandoned.write(request + "\n");
-    });
-    // Reset the connection as soon as the daemon starts streaming a large
-    // response; the daemon must survive the resulting socket error.
-    abandoned.once("data", () => abandoned.destroy());
-    await eventually(async () => {
-      try {
-        const response = await requestTrace(socket, { op: "outline", scope: childA });
-        return response.symbols.length === 2;
-      } catch {
-        return false;
-      }
-    }, "daemon survives a client disconnecting mid-request");
-  } finally {
-    await server.close();
-  }
-
+  console.log("\nScope and failure contract...");
+  const emptyOutline = await executeTool("outline", { path: empty }, rootA);
+  assert(
+    resultText(emptyOutline) === `No symbols found in "${empty}"`,
+    "an indexed file may have no symbols",
+  );
   await rejects(
-    () => requestTrace(socket, { op: "outline", scope: rootA }),
+    () => executeTool("outline", { path: ignored }, rootA),
+    /file is not indexed/,
+    "a gitignored file is unindexed",
+  );
+  await rejects(
+    () => executeTool("outline", { path: home }, rootA),
+    /outside TRACE_PATH/,
+    "a scope outside configured roots fails",
+  );
+
+  await stopDaemon(daemon);
+  daemon = null;
+  await rejects(
+    () => executeTool("outline", {}, rootA),
     /ENOENT|ECONNREFUSED/,
-    "daemon unavailability is a hard client error",
+    "daemon unavailability is a hard error",
   );
 } finally {
+  if (daemon) await stopDaemon(daemon);
+  for (const [name, value] of Object.entries(originalEnvironment)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
   fs.rmSync(temporary, { recursive: true, force: true });
 }
 

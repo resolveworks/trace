@@ -37,3 +37,10 @@ trace/
 - Missing daemon, invalid configuration, and unindexed scope are errors.
 - **tree-sitter** provides syntax, not semantics: callers do not resolve aliases, reassignments, or types.
 - Use `rg` and `read` for text content, strings, and comments.
+
+## Testing
+
+- Keep the test suite minimal and behavior-focused: use black-box contract tests against externally observable behavior.
+- Test through public interfaces and boundaries, not lower-level implementation details or internal structure.
+- Prefer a small set of representative, high-value scenarios over exhaustive or redundant cases.
+- Refactoring without a behavior change should not require test changes.
