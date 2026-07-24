@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { requestTrace } from "../src/client.ts";
@@ -124,6 +125,11 @@ try {
   closeDb();
 
   console.log("\nDaemon protocol...");
+  write(
+    rootA,
+    "many/many.ts",
+    Array.from({ length: 20000 }, (_, index) => `export function many${index}() {}\n`).join(""),
+  );
   const environment = {
     ...process.env,
     TRACE_PATH: `${rootA}${path.delimiter}${rootB}`,
@@ -183,6 +189,23 @@ try {
       });
       return response.definitions.length === 0;
     }, "watcher removes deleted source files");
+
+    const abandoned = net.createConnection(socket);
+    abandoned.on("connect", () => {
+      const request = JSON.stringify({ op: "outline", scope: path.join(rootA, "many", "many.ts") });
+      abandoned.write(request + "\n");
+    });
+    // Reset the connection as soon as the daemon starts streaming a large
+    // response; the daemon must survive the resulting socket error.
+    abandoned.once("data", () => abandoned.destroy());
+    await eventually(async () => {
+      try {
+        const response = await requestTrace(socket, { op: "outline", scope: childA });
+        return response.symbols.length === 2;
+      } catch {
+        return false;
+      }
+    }, "daemon survives a client disconnecting mid-request");
   } finally {
     await server.close();
   }

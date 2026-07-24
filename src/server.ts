@@ -107,6 +107,9 @@ export class TraceServer {
 
   private accept(socket: net.Socket): void {
     socket.setEncoding("utf-8");
+    // Clients routinely vanish mid-request (timeouts, interrupts); never let a
+    // connection error take down the daemon.
+    socket.on("error", () => socket.destroy());
     let input = "";
     socket.on("data", (chunk: string) => {
       input += chunk;
