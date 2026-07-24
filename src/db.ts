@@ -95,8 +95,10 @@ function createSchema(database: DatabaseType): void {
     CREATE INDEX IF NOT EXISTS idx_files_root ON files(root_id);
     CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
     CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
+    CREATE INDEX IF NOT EXISTS idx_symbols_parent ON symbols(parent_id);
     CREATE INDEX IF NOT EXISTS idx_calls_callee ON calls(callee_name);
     CREATE INDEX IF NOT EXISTS idx_calls_file ON calls(file_id);
+    CREATE INDEX IF NOT EXISTS idx_calls_caller ON calls(caller_id);
   `);
 }
 
