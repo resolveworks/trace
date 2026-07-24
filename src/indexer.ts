@@ -19,9 +19,6 @@ export interface IndexResult {
   files: number;
   changed: number;
   removed: number;
-  symbols: number;
-  calls: number;
-  langs: string[];
 }
 
 export function indexRoot(rootId: number, filter: ProjectFilter): IndexResult {
@@ -30,21 +27,14 @@ export function indexRoot(rootId: number, filter: ProjectFilter): IndexResult {
   const present = new Set(files);
   let changed = 0;
   let removed = 0;
-  let symbols = 0;
-  let calls = 0;
-  const langs = new Set<string>();
 
   for (const file of files) {
     const lang = getLanguageForFile(file)!;
-    langs.add(lang.name);
     const sourceFile = readSourceFile(file);
-    const previous = indexed.get(file);
-    if (previous === sourceFile.hash) continue;
+    if (indexed.get(file) === sourceFile.hash) continue;
 
-    const result = indexSourceFile(rootId, file, sourceFile, lang);
+    indexSourceFile(rootId, file, sourceFile, lang);
     changed++;
-    symbols += result.symbols;
-    calls += result.calls;
   }
 
   for (const file of indexed.keys()) {
@@ -54,14 +44,7 @@ export function indexRoot(rootId: number, filter: ProjectFilter): IndexResult {
     }
   }
 
-  return {
-    files: files.length,
-    changed,
-    removed,
-    symbols,
-    calls,
-    langs: [...langs].sort(),
-  };
+  return { files: files.length, changed, removed };
 }
 
 interface ExtractedDef {
@@ -72,11 +55,7 @@ interface ExtractedDef {
   endLine: number;
 }
 
-function extractFromTree(
-  root: SyntaxNode,
-  fileId: number,
-  lang: LoadedLang,
-): { symbols: number; calls: number } {
+function extractFromTree(root: SyntaxNode, fileId: number, lang: LoadedLang): void {
   const defMap = new Map<string, ExtractedDef>();
   const refBuffer: { refNode: SyntaxNode; nameNode: SyntaxNode }[] = [];
 
@@ -121,8 +100,6 @@ function extractFromTree(
     const parent = findEnclosingDef(line, definitions);
     insertCall(fileId, parent?.dbId ?? null, nameNode.text, line, refNode.endPosition.row + 1);
   }
-
-  return { symbols: defMap.size, calls: refBuffer.length };
 }
 
 function findEnclosingDef(
@@ -180,20 +157,18 @@ function indexSourceFile(
   file: string,
   sourceFile: SourceFile,
   lang: LoadedLang,
-): { symbols: number; calls: number } {
+): void {
   parser.setLanguage(lang.language);
   const tree = parser.parse(sourceFile.source);
-  let result = { symbols: 0, calls: 0 };
   replaceFile(rootId, file, sourceFile.hash, (fileId) => {
-    result = extractFromTree(tree.rootNode, fileId, lang);
+    extractFromTree(tree.rootNode, fileId, lang);
   });
-  return result;
 }
 
-export function reindexFile(rootId: number, file: string): { symbols: number; calls: number } {
+export function reindexFile(rootId: number, file: string): void {
   const lang = getLanguageForFile(file);
   if (!lang) throw new Error(`unsupported source file: ${file}`);
-  return indexSourceFile(rootId, file, readSourceFile(file), lang);
+  indexSourceFile(rootId, file, readSourceFile(file), lang);
 }
 
 export function removeFile(file: string): void {
