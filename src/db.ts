@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import type { Database as DatabaseType } from "better-sqlite3";
+import type { Database as DatabaseType, Statement } from "better-sqlite3";
 import * as path from "node:path";
 import { ENV_DIRS } from "./project-filter.ts";
 
@@ -55,10 +55,57 @@ export function sameStat(a: FileStat, b: FileStat): boolean {
 }
 
 let db: DatabaseType | null = null;
+let statements: Statements | null = null;
 
 function requireDb(): DatabaseType {
   if (!db) throw new Error("trace database is not open");
   return db;
+}
+
+function requireStatements(): Statements {
+  if (!statements) throw new Error("trace database is not open");
+  return statements;
+}
+
+/** Hot-path statements, prepared once when the database opens. */
+interface Statements {
+  indexedFiles: Statement;
+  fileContent: Statement;
+  contentByHash: Statement;
+  insertContent: Statement;
+  upsertFile: Statement;
+  deleteOrphans: Statement;
+  deleteFile: Statement;
+  isIndexed: Statement;
+  insertSymbol: Statement;
+  updateParent: Statement;
+  insertCall: Statement;
+}
+
+function prepareStatements(database: DatabaseType): Statements {
+  return {
+    indexedFiles: database.prepare("SELECT path, size, mtime_ns FROM files WHERE root_id = ?"),
+    fileContent: database.prepare("SELECT content_id FROM files WHERE path = ?"),
+    contentByHash: database.prepare("SELECT id FROM contents WHERE hash = ? AND language = ?"),
+    insertContent: database.prepare("INSERT INTO contents(hash, language) VALUES (?, ?)"),
+    upsertFile: database.prepare(
+      `INSERT INTO files(root_id, path, content_id, size, mtime_ns) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(path) DO UPDATE SET root_id = excluded.root_id, content_id = excluded.content_id,
+         size = excluded.size, mtime_ns = excluded.mtime_ns`,
+    ),
+    deleteOrphans: database.prepare(
+      "DELETE FROM contents WHERE NOT EXISTS (SELECT 1 FROM files WHERE files.content_id = contents.id)",
+    ),
+    deleteFile: database.prepare("DELETE FROM files WHERE path = ?"),
+    isIndexed: database.prepare("SELECT 1 FROM files WHERE path = ?"),
+    insertSymbol: database.prepare(
+      "INSERT INTO symbols (content_id, name, kind, start_line, end_line, parent_id) VALUES (?, ?, ?, ?, ?, ?)",
+    ),
+    updateParent: database.prepare("UPDATE symbols SET parent_id = ? WHERE id = ?"),
+    insertCall: database.prepare(
+      "INSERT INTO calls (content_id, caller_id, callee_name, line, end_line) VALUES (?, ?, ?, ?, ?)",
+    ),
+  };
 }
 
 export function openDb(file: string): DatabaseType {
@@ -67,12 +114,14 @@ export function openDb(file: string): DatabaseType {
   db.pragma("foreign_keys = ON");
   db.pragma("journal_mode = WAL");
   createSchema(db);
+  statements = prepareStatements(db);
   return db;
 }
 
 export function closeDb(): void {
   requireDb().close();
   db = null;
+  statements = null;
 }
 
 function createSchema(database: DatabaseType): void {
@@ -156,10 +205,11 @@ export function syncRoots(paths: string[]): Map<string, number> {
 }
 
 export function getIndexedFiles(rootId: number): Map<string, FileStat> {
-  const rows = requireDb()
-    .prepare("SELECT path, size, mtime_ns FROM files WHERE root_id = ?")
-    .safeIntegers(true)
-    .all(rootId) as { path: string; size: bigint; mtime_ns: bigint }[];
+  const rows = requireStatements().indexedFiles.safeIntegers(true).all(rootId) as {
+    path: string;
+    size: bigint;
+    mtime_ns: bigint;
+  }[];
   return new Map(rows.map((row) => [row.path, { size: row.size, mtimeNs: row.mtime_ns }]));
 }
 
@@ -172,53 +222,38 @@ export function replaceFile(
   extract: (contentId: number) => void,
 ): void {
   const database = requireDb();
+  const stmts = requireStatements();
   database.transaction(() => {
-    const previous = database.prepare("SELECT content_id FROM files WHERE path = ?").get(file) as
-      | { content_id: number }
-      | undefined;
-    let content = database
-      .prepare("SELECT id FROM contents WHERE hash = ? AND language = ?")
-      .get(hash, language) as { id: number } | undefined;
+    const previous = stmts.fileContent.get(file) as { content_id: number } | undefined;
+    let content = stmts.contentByHash.get(hash, language) as { id: number } | undefined;
 
     if (!content) {
-      const result = database
-        .prepare("INSERT INTO contents(hash, language) VALUES (?, ?)")
-        .run(hash, language);
+      const result = stmts.insertContent.run(hash, language);
       content = { id: Number(result.lastInsertRowid) };
       extract(content.id);
     }
 
-    database
-      .prepare(
-        `INSERT INTO files(root_id, path, content_id, size, mtime_ns) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(path) DO UPDATE SET root_id = excluded.root_id, content_id = excluded.content_id,
-           size = excluded.size, mtime_ns = excluded.mtime_ns`,
-      )
-      .run(rootId, file, content.id, stat.size, stat.mtimeNs);
+    stmts.upsertFile.run(rootId, file, content.id, stat.size, stat.mtimeNs);
     if (previous && previous.content_id !== content.id) deleteOrphanContents();
   })();
 }
 
 export function deleteOrphanContents(): void {
-  requireDb()
-    .prepare(
-      "DELETE FROM contents WHERE NOT EXISTS (SELECT 1 FROM files WHERE files.content_id = contents.id)",
-    )
-    .run();
+  requireStatements().deleteOrphans.run();
 }
 
 export function deleteFiles(files: string[]): void {
   if (files.length === 0) return;
   const database = requireDb();
+  const remove = requireStatements().deleteFile;
   database.transaction(() => {
-    const remove = database.prepare("DELETE FROM files WHERE path = ?");
     for (const file of files) remove.run(file);
     deleteOrphanContents();
   })();
 }
 
 export function isIndexedFile(file: string): boolean {
-  return requireDb().prepare("SELECT 1 FROM files WHERE path = ?").get(file) !== undefined;
+  return requireStatements().isIndexed.get(file) !== undefined;
 }
 
 export function hasIndexedFileUnder(directory: string): boolean {
@@ -239,16 +274,19 @@ export function insertSymbol(
   endLine: number,
   parentId: number | null = null,
 ): number {
-  const result = requireDb()
-    .prepare(
-      "INSERT INTO symbols (content_id, name, kind, start_line, end_line, parent_id) VALUES (?, ?, ?, ?, ?, ?)",
-    )
-    .run(contentId, name, kind, startLine, endLine, parentId);
+  const result = requireStatements().insertSymbol.run(
+    contentId,
+    name,
+    kind,
+    startLine,
+    endLine,
+    parentId,
+  );
   return Number(result.lastInsertRowid);
 }
 
 export function updateSymbolParent(id: number, parentId: number): void {
-  requireDb().prepare("UPDATE symbols SET parent_id = ? WHERE id = ?").run(parentId, id);
+  requireStatements().updateParent.run(parentId, id);
 }
 
 export function insertCall(
@@ -258,11 +296,7 @@ export function insertCall(
   line: number,
   endLine: number,
 ): void {
-  requireDb()
-    .prepare(
-      "INSERT INTO calls (content_id, caller_id, callee_name, line, end_line) VALUES (?, ?, ?, ?, ?)",
-    )
-    .run(contentId, callerId, calleeName, line, endLine);
+  requireStatements().insertCall.run(contentId, callerId, calleeName, line, endLine);
 }
 
 const IN_SCOPE = "(f.path = ? OR f.path GLOB ? || '/*')";
