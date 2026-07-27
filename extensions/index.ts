@@ -91,6 +91,7 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "Get the full implementation of a named symbol",
     promptGuidelines: [
       "Use def when you know a symbol name and need its implementation. Pass path to search another indexed file, directory, project, or dependency.",
+      'Query installed dependencies at their project-visible paths, e.g. def("get", ".venv/lib/python3.12/site-packages/httpx") or def("parse", "node_modules/typescript"). Project-scoped searches exclude dependency code unless the path points into it.',
     ],
     parameters: Type.Object({
       name: Type.String({ description: "Name of the symbol to look up" }),
@@ -150,6 +151,7 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "Find all invocations of a named function or method",
     promptGuidelines: [
       "Use callers to find syntactic invocations of a symbol. Pass path to search another indexed file, directory, project, or dependency.",
+      "Query installed dependencies at their project-visible paths, e.g. node_modules/<pkg> or .venv/lib/python3.x/site-packages/<pkg>. Project-scoped searches exclude dependency code unless the path points into it.",
     ],
     parameters: Type.Object({
       name: Type.String({ description: "Name of the function or method" }),
