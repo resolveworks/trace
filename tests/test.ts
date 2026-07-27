@@ -147,12 +147,30 @@ const source = write(
   ].join("\n"),
 );
 const empty = write(rootA, "empty.ts", "// indexed, with no symbols\n");
+const sharedSource = write(
+  rootA,
+  "shared.ts",
+  "export function sharedEnvironmentValue(): number { return 10; }\n",
+);
 write(rootA, ".gitignore", "ignored.ts\nnode_modules/\n.venv/\n");
 const ignored = write(rootA, "ignored.ts", "export function ignoredSymbol() {}\n");
 const dependencyPhysical = write(
   rootA,
   "node_modules/.pnpm/dep@1.0.0/node_modules/dep/index.js",
-  "export function dependencyValue() {\n  return 1;\n}\n",
+  [
+    "export function dependencyValue() {",
+    "  return 1;",
+    "}",
+    "",
+    "export function sharedEnvironmentValue() {",
+    "  return 20;",
+    "}",
+    "",
+    "export function dependencyCaller() {",
+    "  return sharedEnvironmentValue();",
+    "}",
+    "",
+  ].join("\n"),
 );
 const dependencyDirectory = path.join(rootA, "node_modules", "dep");
 fs.symlinkSync(path.dirname(dependencyPhysical), dependencyDirectory, "dir");
@@ -246,6 +264,55 @@ try {
     resultText(venvDefinition).includes(`function_definition environment_value in ${venvModule}`) &&
       resultText(venvOutline).includes("environment_value (function)"),
     "a gitignored virtual environment remains indexable",
+  );
+
+  const projectSharedDefinition = await executeTool(
+    "def",
+    { name: "sharedEnvironmentValue" },
+    rootA,
+  );
+  const dependencySharedDefinition = await executeTool(
+    "def",
+    { name: "sharedEnvironmentValue", path: dependencyDirectory },
+    rootA,
+  );
+  const nodeModulesSharedDefinition = await executeTool(
+    "def",
+    { name: "sharedEnvironmentValue", path: path.join(rootA, "node_modules") },
+    rootA,
+  );
+  assert(
+    resultText(projectSharedDefinition).includes(`in ${sharedSource}:1`) &&
+      !resultText(projectSharedDefinition).includes(dependencyLogical) &&
+      (projectSharedDefinition.details as { definitions: unknown[] }).definitions.length === 1,
+    "project-scoped definitions exclude dependency environments",
+  );
+  assert(
+    resultText(dependencySharedDefinition).includes(`in ${dependencyLogical}:5-7`) &&
+      !resultText(dependencySharedDefinition).includes(sharedSource),
+    "dependency-scoped definitions include the dependency definition",
+  );
+  assert(
+    resultText(nodeModulesSharedDefinition).includes(`in ${dependencyLogical}:5-7`),
+    "a scope at the environment directory includes dependency definitions",
+  );
+
+  const projectSharedCallers = await executeTool(
+    "callers",
+    { name: "sharedEnvironmentValue" },
+    rootA,
+  );
+  assert(
+    resultText(projectSharedCallers) === 'No callers found for "sharedEnvironmentValue"',
+    "project-scoped callers exclude call sites in dependency environments",
+  );
+
+  const projectOutline = await executeTool("outline", {}, rootA);
+  assert(
+    resultText(projectOutline).includes(`${sharedSource}:`) &&
+      !resultText(projectOutline).includes(dependencyLogical) &&
+      !resultText(projectOutline).includes(venvModule),
+    "project-scoped outlines exclude dependency environment files",
   );
 
   fs.writeFileSync(

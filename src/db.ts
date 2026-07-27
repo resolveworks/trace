@@ -1,5 +1,7 @@
 import Database from "better-sqlite3";
 import type { Database as DatabaseType } from "better-sqlite3";
+import * as path from "node:path";
+import { ENV_DIRS } from "./project-filter.ts";
 
 export interface Symbol {
   id: number;
@@ -159,9 +161,12 @@ export function isIndexedFile(file: string): boolean {
 }
 
 export function hasIndexedFileUnder(directory: string): boolean {
+  const excludeEnvironments = scopeIncludesEnvironment(directory)
+    ? ""
+    : ` AND ${EXCLUDE_ENVIRONMENTS}`;
   return (
     requireDb()
-      .prepare("SELECT 1 FROM files f WHERE f.path GLOB ? || '/*' LIMIT 1")
+      .prepare(`SELECT 1 FROM files f WHERE f.path GLOB ? || '/*'${excludeEnvironments} LIMIT 1`)
       .get(directory) !== undefined
   );
 }
@@ -201,6 +206,17 @@ export function insertCall(
 }
 
 const IN_SCOPE = "(f.path = ? OR f.path GLOB ? || '/*')";
+const EXCLUDE_ENVIRONMENTS = [...ENV_DIRS]
+  .map((name) => `f.path NOT GLOB '*/${name}/*'`)
+  .join(" AND ");
+
+function scopeIncludesEnvironment(scope: string): boolean {
+  return scope.split(path.sep).some((segment) => ENV_DIRS.has(segment));
+}
+
+function environmentFilter(scope: string): string {
+  return scopeIncludesEnvironment(scope) ? "" : ` AND ${EXCLUDE_ENVIRONMENTS}`;
+}
 
 export function findDefinition(name: string, scope: string): Definition[] {
   const rows = requireDb()
@@ -210,7 +226,7 @@ export function findDefinition(name: string, scope: string): Definition[] {
        FROM symbols s
        JOIN files f ON s.file_id = f.id
        LEFT JOIN symbols p ON s.parent_id = p.id
-       WHERE s.name = ? AND ${IN_SCOPE}
+       WHERE s.name = ? AND ${IN_SCOPE}${environmentFilter(scope)}
        ORDER BY length(f.path), f.path, s.start_line`,
     )
     .all(name, scope, scope) as Record<string, unknown>[];
@@ -235,7 +251,7 @@ export function findCallers(name: string, scope: string): CallSite[] {
        FROM calls c
        JOIN files f ON c.file_id = f.id
        LEFT JOIN symbols s ON c.caller_id = s.id
-       WHERE c.callee_name = ? AND ${IN_SCOPE}
+       WHERE c.callee_name = ? AND ${IN_SCOPE}${environmentFilter(scope)}
        ORDER BY length(f.path), f.path, c.line`,
     )
     .all(name, scope, scope) as Record<string, unknown>[];
@@ -255,7 +271,7 @@ export function getOutline(scope: string): DirSymbol[] {
       `SELECT f.path AS file, s.id, s.name, s.kind, s.start_line, s.end_line, s.parent_id
        FROM symbols s
        JOIN files f ON s.file_id = f.id
-       WHERE ${IN_SCOPE}
+       WHERE ${IN_SCOPE}${environmentFilter(scope)}
        ORDER BY f.path, s.start_line`,
     )
     .all(scope, scope) as Record<string, unknown>[];
