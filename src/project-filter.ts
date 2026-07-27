@@ -6,6 +6,8 @@ import { byExtension } from "./languages.ts";
 
 type Rules = ReturnType<typeof ignore>;
 
+export const ENV_DIRS: ReadonlySet<string> = new Set(["node_modules", ".venv"]);
+
 /** Shared source and .gitignore filter for the initial walk and Chokidar. */
 export class ProjectFilter {
   readonly root: string;
@@ -40,6 +42,7 @@ export class ProjectFilter {
 
     const parts = relative.split(path.sep);
     if (parts.includes(".git")) return true;
+    if (parts.some((part) => ENV_DIRS.has(part))) return false;
 
     const active: { directory: string; rules: Rules }[] = [];
     let directory = this.root;

@@ -147,8 +147,21 @@ const source = write(
   ].join("\n"),
 );
 const empty = write(rootA, "empty.ts", "// indexed, with no symbols\n");
-write(rootA, ".gitignore", "ignored.ts\n");
+write(rootA, ".gitignore", "ignored.ts\nnode_modules/\n.venv/\n");
 const ignored = write(rootA, "ignored.ts", "export function ignoredSymbol() {}\n");
+const dependencyPhysical = write(
+  rootA,
+  "node_modules/.pnpm/dep@1.0.0/node_modules/dep/index.js",
+  "export function dependencyValue() {\n  return 1;\n}\n",
+);
+const dependencyDirectory = path.join(rootA, "node_modules", "dep");
+fs.symlinkSync(path.dirname(dependencyPhysical), dependencyDirectory, "dir");
+const dependencyLogical = path.join(dependencyDirectory, "index.js");
+const venvModule = write(
+  rootA,
+  ".venv/lib/python3.12/site-packages/pkg/mod.py",
+  "def environment_value():\n    return 12\n",
+);
 write(rootB, "b.ts", "export function target(): number { return 2; }\n");
 fs.mkdirSync(configDirectory, { recursive: true });
 fs.writeFileSync(
@@ -200,6 +213,68 @@ try {
     "outline accepts an absolute directory and renders nested symbols",
   );
 
+  console.log("\nDependency environments...");
+  const dependencyDefinition = await executeTool(
+    "def",
+    { name: "dependencyValue", path: dependencyDirectory },
+    rootA,
+  );
+  assert(
+    resultText(dependencyDefinition).includes(
+      `function_declaration dependencyValue in ${dependencyLogical}:1-3`,
+    ) && !resultText(dependencyDefinition).includes(dependencyPhysical),
+    "a pnpm package is indexed and reported through its logical symlink path",
+  );
+
+  const dependencyFileDefinition = await executeTool(
+    "def",
+    { name: "dependencyValue", path: dependencyLogical },
+    rootA,
+  );
+  assert(
+    resultText(dependencyFileDefinition).includes(`in ${dependencyLogical}:1-3`),
+    "a dependency file can be scoped through its symlink path",
+  );
+
+  const venvDefinition = await executeTool(
+    "def",
+    { name: "environment_value", path: path.dirname(venvModule) },
+    rootA,
+  );
+  const venvOutline = await executeTool("outline", { path: venvModule }, rootA);
+  assert(
+    resultText(venvDefinition).includes(`function_definition environment_value in ${venvModule}`) &&
+      resultText(venvOutline).includes("environment_value (function)"),
+    "a gitignored virtual environment remains indexable",
+  );
+
+  fs.writeFileSync(
+    dependencyPhysical,
+    "export function dependencyValue() {\n  const updated = 2;\n  return updated;\n}\n",
+  );
+  await eventually(async () => {
+    const result = await executeTool(
+      "def",
+      { name: "dependencyValue", path: dependencyDirectory },
+      rootA,
+    );
+    return (
+      resultText(result).includes(`in ${dependencyLogical}:1-4`) &&
+      resultText(result).includes("   3 |   return updated;")
+    );
+  }, "watcher reindexes dependency changes through the logical scope");
+  await rejects(
+    () => executeTool("def", { name: "dependencyValue", path: dependencyPhysical }, rootA),
+    /file is not indexed/,
+    "dependency events do not create physical .pnpm index rows",
+  );
+
+  fs.rmSync(path.dirname(dependencyPhysical), { recursive: true, force: true });
+  await eventually(async () => {
+    const result = await executeTool("def", { name: "dependencyValue" }, rootA);
+    return resultText(result) === 'No definition found for "dependencyValue"';
+  }, "watcher removes dependency symbols when their physical package is deleted");
+
   console.log("\nFilesystem lifecycle...");
   const changing = path.join(rootA, "changing.ts");
   fs.writeFileSync(changing, "export function addedSymbol() {}\n");
@@ -237,8 +312,8 @@ try {
   );
   await rejects(
     () => executeTool("outline", { path: home }, rootA),
-    /outside TRACE_PATH/,
-    "a scope outside configured roots fails",
+    new RegExp(`outside indexed roots:.*roots: ${rootA}, ${rootB}`),
+    "an outside-roots error lists the indexed roots",
   );
 
   await stopDaemon(daemon);

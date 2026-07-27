@@ -34,7 +34,7 @@ const configs: LanguageConfig[] = [
     name: "typescript",
     wasm: "tree-sitter-typescript/tree-sitter-typescript.wasm",
     tags: ["tree-sitter-typescript/queries/tags.scm", "tree-sitter-javascript/queries/tags.scm"],
-    exts: [".ts"],
+    exts: [".js", ".ts"],
   },
   {
     name: "tsx",

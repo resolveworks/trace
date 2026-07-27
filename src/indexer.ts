@@ -37,9 +37,9 @@ export interface IndexResult {
   removed: number;
 }
 
-export function indexRoot(rootId: number, filter: ProjectFilter): IndexResult {
+export function indexRoot(rootId: number, filter: ProjectFilter, dir = filter.root): IndexResult {
   getParser();
-  const files = collectFiles(filter.root, filter);
+  const files = fs.existsSync(dir) ? collectFiles(dir, filter) : [];
   const indexed = getIndexedFiles(rootId);
   const present = new Set(files);
   let changed = 0;
@@ -55,7 +55,10 @@ export function indexRoot(rootId: number, filter: ProjectFilter): IndexResult {
   }
 
   for (const file of indexed.keys()) {
-    if (!present.has(file)) {
+    const relative = path.relative(dir, file);
+    const isUnderDir =
+      relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`));
+    if (isUnderDir && !present.has(file)) {
       deleteFile(file);
       removed++;
     }
@@ -139,7 +142,11 @@ function findEnclosingDef(
   return best;
 }
 
-function collectFiles(dir: string, filter: ProjectFilter): string[] {
+function collectFiles(
+  dir: string,
+  filter: ProjectFilter,
+  visited = new Set<string>([fs.realpathSync(dir)]),
+): string[] {
   const results: string[] = [];
   const entries = fs
     .readdirSync(dir, { withFileTypes: true })
@@ -147,9 +154,24 @@ function collectFiles(dir: string, filter: ProjectFilter): string[] {
 
   for (const entry of entries) {
     const file = path.join(dir, entry.name);
-    if (entry.isDirectory() && filter.includesDirectory(file)) {
-      results.push(...collectFiles(file, filter));
-    } else if (entry.isFile() && filter.includesFile(file)) {
+    let isDirectory = entry.isDirectory();
+    let isFile = entry.isFile();
+    if (entry.isSymbolicLink()) {
+      try {
+        const stat = fs.statSync(file);
+        isDirectory = stat.isDirectory();
+        isFile = stat.isFile();
+      } catch {
+        continue;
+      }
+    }
+
+    if (isDirectory && entry.name !== ".pnpm" && filter.includesDirectory(file)) {
+      const realpath = fs.realpathSync(file);
+      if (visited.has(realpath)) continue;
+      visited.add(realpath);
+      results.push(...collectFiles(file, filter, visited));
+    } else if (isFile && filter.includesFile(file)) {
       results.push(file);
     }
   }

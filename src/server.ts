@@ -16,7 +16,7 @@ import {
 } from "./db.ts";
 import { closeIndexer, indexRoot, initializeIndexer, reindexFile, removeFile } from "./indexer.ts";
 import { closeLanguages } from "./languages.ts";
-import { ProjectFilter } from "./project-filter.ts";
+import { ENV_DIRS, ProjectFilter } from "./project-filter.ts";
 import {
   TraceRequestSchema,
   type TraceRequest,
@@ -32,12 +32,21 @@ interface IndexedRoot {
 
 class RequestError extends Error {}
 
+function environmentDirectory(root: string, file: string): string | null {
+  const relative = path.relative(root, file);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`)) return null;
+  const parts = relative.split(path.sep);
+  const envIndex = parts.findIndex((part) => ENV_DIRS.has(part));
+  return envIndex === -1 ? null : path.join(root, ...parts.slice(0, envIndex + 1));
+}
+
 export class TraceServer {
   private readonly socketPath: string;
   private readonly databasePath: string;
   private readonly rootPaths: string[];
   private roots: IndexedRoot[] = [];
   private watchers: FSWatcher[] = [];
+  private readonly envRescans = new Map<string, ReturnType<typeof setTimeout>>();
   private server: net.Server | null = null;
 
   constructor(environment: NodeJS.ProcessEnv = process.env) {
@@ -81,6 +90,8 @@ export class TraceServer {
   async close(): Promise<void> {
     for (const watcher of this.watchers) await watcher.close();
     this.watchers = [];
+    for (const timeout of this.envRescans.values()) clearTimeout(timeout);
+    this.envRescans.clear();
     if (this.server) {
       await new Promise<void>((resolve, reject) =>
         this.server!.close((error) => (error ? reject(error) : resolve())),
@@ -98,11 +109,31 @@ export class TraceServer {
       followSymlinks: false,
       ignored: root.filter.watcherIgnored,
     });
-    watcher.on("add", (file) => reindexFile(root.id, path.resolve(file)));
-    watcher.on("change", (file) => reindexFile(root.id, path.resolve(file)));
-    watcher.on("unlink", (file) => removeFile(path.resolve(file)));
+    watcher.on("add", (file) => this.handleWatchEvent(root, file, false));
+    watcher.on("change", (file) => this.handleWatchEvent(root, file, false));
+    watcher.on("unlink", (file) => this.handleWatchEvent(root, file, true));
     await new Promise<void>((resolve) => watcher.once("ready", resolve));
     return watcher;
+  }
+
+  private handleWatchEvent(root: IndexedRoot, file: string, removed: boolean): void {
+    const resolved = path.resolve(file);
+    const envDir = environmentDirectory(root.path, resolved);
+    if (envDir) {
+      const pending = this.envRescans.get(envDir);
+      if (pending) clearTimeout(pending);
+      this.envRescans.set(
+        envDir,
+        setTimeout(() => {
+          this.envRescans.delete(envDir);
+          indexRoot(root.id, root.filter, envDir);
+        }, 200),
+      );
+      return;
+    }
+
+    if (removed) removeFile(resolved);
+    else reindexFile(root.id, resolved);
   }
 
   private accept(socket: net.Socket): void {
@@ -154,15 +185,19 @@ export class TraceServer {
   }
 
   private resolveScope(requested: string): string {
-    let scope: string;
+    const scope = path.resolve(requested);
+    let stat: ReturnType<typeof fs.statSync>;
     try {
-      scope = fs.realpathSync(requested);
+      stat = fs.statSync(scope);
     } catch {
       throw new RequestError(`scope does not exist: ${requested}`);
     }
-    const stat = fs.statSync(scope);
     const root = this.roots.find((candidate) => contains(candidate.path, scope));
-    if (!root) throw new RequestError(`scope is outside TRACE_PATH: ${scope}`);
+    if (!root) {
+      throw new RequestError(
+        `scope is outside indexed roots: ${scope} (roots: ${this.rootPaths.join(", ")})`,
+      );
+    }
 
     if (stat.isFile()) {
       if (!isIndexedFile(scope)) throw new RequestError(`file is not indexed: ${scope}`);
