@@ -30,7 +30,7 @@ trace/
 ## Design
 
 - Roots are configured in `~/.pi/agent/trace.json` (or `TRACE_PATH`): a list of non-overlapping absolute directories of first-party code. Package-manager caches (uv archive, pnpm store) are never roots.
-- The daemon owns one persistent SQLite database and all chokidar watchers.
+- The daemon owns one persistent SQLite database and all chokidar watchers. The schema is never migrated: on change, delete the database and the daemon rebuilds it from the roots.
 - `node_modules` and `.venv` under a root are dependency environments: indexed despite `.gitignore`, stored at their logical (symlink-unresolved) paths, and excluded from queries whose scope is not inside them. The installed environment is authoritative, not the cache.
 - Files are stored as logical absolute paths and belong to explicit roots; symbols and calls are stored per content (hash + language), so hardlinked or copied files are parsed once.
 - Every query has a file or directory scope; there is no global fallback search.

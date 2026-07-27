@@ -62,16 +62,6 @@ export function closeDb(): void {
 }
 
 function createSchema(database: DatabaseType): void {
-  if ((database.pragma("user_version", { simple: true }) as number) < 1) {
-    database.exec(`
-      DROP TABLE IF EXISTS calls;
-      DROP TABLE IF EXISTS symbols;
-      DROP TABLE IF EXISTS files;
-      DROP TABLE IF EXISTS contents;
-      DROP TABLE IF EXISTS roots;
-    `);
-  }
-
   database.exec(`
     CREATE TABLE IF NOT EXISTS roots (
       id INTEGER PRIMARY KEY,
@@ -119,8 +109,6 @@ function createSchema(database: DatabaseType): void {
     CREATE INDEX IF NOT EXISTS idx_calls_callee ON calls(callee_name);
     CREATE INDEX IF NOT EXISTS idx_calls_content ON calls(content_id);
     CREATE INDEX IF NOT EXISTS idx_calls_caller ON calls(caller_id);
-
-    PRAGMA user_version = 1;
   `);
 }
 
