@@ -41,18 +41,17 @@ export interface DirSymbol extends OutlineSymbol {
 }
 
 /**
- * Content identity: the underlying file, not a path. Hardlinks and symlinks
- * share an inode, so they share a content row; copies do not. mtime_ns makes
- * inode reuse after deletion a non-issue.
+ * Freshness hint for one path: a stat match means the file is skipped without
+ * being read. Archive tools can preserve mtimes, so this is only a cache —
+ * content identity is the hash, never the stat.
  */
-export interface ContentKey {
-  ino: bigint;
+export interface FileStat {
   size: bigint;
   mtimeNs: bigint;
 }
 
-export function sameContent(a: ContentKey, b: ContentKey): boolean {
-  return a.ino === b.ino && a.size === b.size && a.mtimeNs === b.mtimeNs;
+export function sameStat(a: FileStat, b: FileStat): boolean {
+  return a.size === b.size && a.mtimeNs === b.mtimeNs;
 }
 
 let db: DatabaseType | null = null;
@@ -85,18 +84,18 @@ function createSchema(database: DatabaseType): void {
 
     CREATE TABLE IF NOT EXISTS contents (
       id INTEGER PRIMARY KEY,
-      ino INTEGER NOT NULL,
-      size INTEGER NOT NULL,
-      mtime_ns INTEGER NOT NULL,
+      hash TEXT NOT NULL,
       language TEXT NOT NULL,
-      UNIQUE(ino, size, mtime_ns, language)
+      UNIQUE(hash, language)
     );
 
     CREATE TABLE IF NOT EXISTS files (
       id INTEGER PRIMARY KEY,
       root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
       path TEXT NOT NULL UNIQUE,
-      content_id INTEGER NOT NULL REFERENCES contents(id)
+      content_id INTEGER NOT NULL REFERENCES contents(id),
+      size INTEGER NOT NULL,
+      mtime_ns INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS symbols (
@@ -156,22 +155,19 @@ export function syncRoots(paths: string[]): Map<string, number> {
   return sync();
 }
 
-export function getIndexedFiles(rootId: number): Map<string, ContentKey> {
+export function getIndexedFiles(rootId: number): Map<string, FileStat> {
   const rows = requireDb()
-    .prepare(
-      "SELECT f.path, c.ino, c.size, c.mtime_ns FROM files f JOIN contents c ON c.id = f.content_id WHERE f.root_id = ?",
-    )
+    .prepare("SELECT path, size, mtime_ns FROM files WHERE root_id = ?")
     .safeIntegers(true)
-    .all(rootId) as { path: string; ino: bigint; size: bigint; mtime_ns: bigint }[];
-  return new Map(
-    rows.map((row) => [row.path, { ino: row.ino, size: row.size, mtimeNs: row.mtime_ns }]),
-  );
+    .all(rootId) as { path: string; size: bigint; mtime_ns: bigint }[];
+  return new Map(rows.map((row) => [row.path, { size: row.size, mtimeNs: row.mtime_ns }]));
 }
 
 export function replaceFile(
   rootId: number,
   file: string,
-  key: ContentKey,
+  stat: FileStat,
+  hash: string,
   language: string,
   extract: (contentId: number) => void,
 ): void {
@@ -181,25 +177,24 @@ export function replaceFile(
       | { content_id: number }
       | undefined;
     let content = database
-      .prepare(
-        "SELECT id FROM contents WHERE ino = ? AND size = ? AND mtime_ns = ? AND language = ?",
-      )
-      .get(key.ino, key.size, key.mtimeNs, language) as { id: number } | undefined;
+      .prepare("SELECT id FROM contents WHERE hash = ? AND language = ?")
+      .get(hash, language) as { id: number } | undefined;
 
     if (!content) {
       const result = database
-        .prepare("INSERT INTO contents(ino, size, mtime_ns, language) VALUES (?, ?, ?, ?)")
-        .run(key.ino, key.size, key.mtimeNs, language);
+        .prepare("INSERT INTO contents(hash, language) VALUES (?, ?)")
+        .run(hash, language);
       content = { id: Number(result.lastInsertRowid) };
       extract(content.id);
     }
 
     database
       .prepare(
-        `INSERT INTO files(root_id, path, content_id) VALUES (?, ?, ?)
-         ON CONFLICT(path) DO UPDATE SET root_id = excluded.root_id, content_id = excluded.content_id`,
+        `INSERT INTO files(root_id, path, content_id, size, mtime_ns) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(path) DO UPDATE SET root_id = excluded.root_id, content_id = excluded.content_id,
+           size = excluded.size, mtime_ns = excluded.mtime_ns`,
       )
-      .run(rootId, file, content.id);
+      .run(rootId, file, content.id, stat.size, stat.mtimeNs);
     if (previous && previous.content_id !== content.id) deleteOrphanContents();
   })();
 }

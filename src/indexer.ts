@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Parser, type Node as SyntaxNode } from "web-tree-sitter";
@@ -10,9 +11,9 @@ import {
   insertCall,
   insertSymbol,
   replaceFile,
-  sameContent,
+  sameStat,
   updateSymbolParent,
-  type ContentKey,
+  type FileStat,
 } from "./db.ts";
 
 let parser: Parser | null = null;
@@ -47,12 +48,12 @@ export function indexRoot(rootId: number, filter: ProjectFilter, dir = filter.ro
   let changed = 0;
 
   for (const file of files) {
-    const key = statContentKey(file);
-    if (!key) continue;
+    const stat = statFile(file);
+    if (!stat) continue;
     const current = indexed.get(file);
-    if (current && sameContent(current, key)) continue;
+    if (current && sameStat(current, stat)) continue;
 
-    indexSourceFile(rootId, file, key);
+    indexSourceFile(rootId, file, stat);
     changed++;
   }
 
@@ -68,19 +69,19 @@ export function indexRoot(rootId: number, filter: ProjectFilter, dir = filter.ro
 /** Reconcile one file after a watcher event. */
 export function reindexFile(rootId: number, file: string): void {
   getParser();
-  const key = statContentKey(file);
-  if (!key) {
+  const stat = statFile(file);
+  if (!stat) {
     deleteFiles([file]); // raced with a deletion
     return;
   }
-  indexSourceFile(rootId, file, key);
+  indexSourceFile(rootId, file, stat);
 }
 
-/** Content identity from a stat, following symlinks to the underlying file. */
-function statContentKey(file: string): ContentKey | null {
+/** Freshness hint from a stat, following symlinks to the underlying file. */
+function statFile(file: string): FileStat | null {
   try {
     const stats = fs.statSync(file, { bigint: true });
-    return { ino: stats.ino, size: stats.size, mtimeNs: stats.mtimeNs };
+    return { size: stats.size, mtimeNs: stats.mtimeNs };
   } catch {
     return null;
   }
@@ -88,14 +89,15 @@ function statContentKey(file: string): ContentKey | null {
 
 /**
  * Point a file at its content, parsing only when the content has never been
- * seen. A path whose inode is already known (hardlink, symlink, unchanged
- * rewrite) is re-pointed without reading a single byte.
+ * seen. Identical bytes under the same grammar — hardlinks, symlinks, plain
+ * copies — share one content row.
  */
-function indexSourceFile(rootId: number, file: string, key: ContentKey): void {
+function indexSourceFile(rootId: number, file: string, stat: FileStat): void {
   const lang = getLanguageForFile(file);
   if (!lang) throw new Error(`unsupported source file: ${file}`);
-  replaceFile(rootId, file, key, lang.name, (contentId) => {
-    const source = fs.readFileSync(file, "utf-8");
+  const source = fs.readFileSync(file, "utf-8");
+  const hash = createHash("sha256").update(source).digest("hex");
+  replaceFile(rootId, file, stat, hash, lang.name, (contentId) => {
     const activeParser = getParser();
     activeParser.setLanguage(lang.language);
     const tree = activeParser.parse(source);
