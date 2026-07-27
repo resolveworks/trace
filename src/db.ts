@@ -40,6 +40,21 @@ export interface DirSymbol extends OutlineSymbol {
   file: string;
 }
 
+/**
+ * Content identity: the underlying file, not a path. Hardlinks and symlinks
+ * share an inode, so they share a content row; copies do not. mtime_ns makes
+ * inode reuse after deletion a non-issue.
+ */
+export interface ContentKey {
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+}
+
+export function sameContent(a: ContentKey, b: ContentKey): boolean {
+  return a.ino === b.ino && a.size === b.size && a.mtimeNs === b.mtimeNs;
+}
+
 let db: DatabaseType | null = null;
 
 function requireDb(): DatabaseType {
@@ -70,9 +85,11 @@ function createSchema(database: DatabaseType): void {
 
     CREATE TABLE IF NOT EXISTS contents (
       id INTEGER PRIMARY KEY,
-      hash TEXT NOT NULL,
+      ino INTEGER NOT NULL,
+      size INTEGER NOT NULL,
+      mtime_ns INTEGER NOT NULL,
       language TEXT NOT NULL,
-      UNIQUE(hash, language)
+      UNIQUE(ino, size, mtime_ns, language)
     );
 
     CREATE TABLE IF NOT EXISTS files (
@@ -139,19 +156,22 @@ export function syncRoots(paths: string[]): Map<string, number> {
   return sync();
 }
 
-export function getIndexedFiles(rootId: number): Map<string, string> {
+export function getIndexedFiles(rootId: number): Map<string, ContentKey> {
   const rows = requireDb()
     .prepare(
-      "SELECT f.path, c.hash FROM files f JOIN contents c ON c.id = f.content_id WHERE f.root_id = ?",
+      "SELECT f.path, c.ino, c.size, c.mtime_ns FROM files f JOIN contents c ON c.id = f.content_id WHERE f.root_id = ?",
     )
-    .all(rootId) as { path: string; hash: string }[];
-  return new Map(rows.map((row) => [row.path, row.hash]));
+    .safeIntegers(true)
+    .all(rootId) as { path: string; ino: bigint; size: bigint; mtime_ns: bigint }[];
+  return new Map(
+    rows.map((row) => [row.path, { ino: row.ino, size: row.size, mtimeNs: row.mtime_ns }]),
+  );
 }
 
 export function replaceFile(
   rootId: number,
   file: string,
-  hash: string,
+  key: ContentKey,
   language: string,
   extract: (contentId: number) => void,
 ): void {
@@ -161,13 +181,15 @@ export function replaceFile(
       | { content_id: number }
       | undefined;
     let content = database
-      .prepare("SELECT id FROM contents WHERE hash = ? AND language = ?")
-      .get(hash, language) as { id: number } | undefined;
+      .prepare(
+        "SELECT id FROM contents WHERE ino = ? AND size = ? AND mtime_ns = ? AND language = ?",
+      )
+      .get(key.ino, key.size, key.mtimeNs, language) as { id: number } | undefined;
 
     if (!content) {
       const result = database
-        .prepare("INSERT INTO contents(hash, language) VALUES (?, ?)")
-        .run(hash, language);
+        .prepare("INSERT INTO contents(ino, size, mtime_ns, language) VALUES (?, ?, ?, ?)")
+        .run(key.ino, key.size, key.mtimeNs, language);
       content = { id: Number(result.lastInsertRowid) };
       extract(content.id);
     }

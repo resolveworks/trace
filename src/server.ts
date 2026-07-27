@@ -17,7 +17,7 @@ import {
 } from "./db.ts";
 import { closeIndexer, indexRoot, initializeIndexer, reindexFile } from "./indexer.ts";
 import { closeLanguages } from "./languages.ts";
-import { ENV_DIRS, ProjectFilter } from "./project-filter.ts";
+import { ProjectFilter } from "./project-filter.ts";
 import {
   TraceRequestSchema,
   type TraceRequest,
@@ -33,21 +33,12 @@ interface IndexedRoot {
 
 class RequestError extends Error {}
 
-function environmentDirectory(root: string, file: string): string | null {
-  const relative = path.relative(root, file);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`)) return null;
-  const parts = relative.split(path.sep);
-  const envIndex = parts.findIndex((part) => ENV_DIRS.has(part));
-  return envIndex === -1 ? null : path.join(root, ...parts.slice(0, envIndex + 1));
-}
-
 export class TraceServer {
   private readonly socketPath: string;
   private readonly databasePath: string;
   private readonly rootPaths: string[];
   private roots: IndexedRoot[] = [];
   private watchers: FSWatcher[] = [];
-  private readonly envRescans = new Map<string, ReturnType<typeof setTimeout>>();
   private server: net.Server | null = null;
 
   constructor(environment: NodeJS.ProcessEnv = process.env) {
@@ -91,8 +82,6 @@ export class TraceServer {
   async close(): Promise<void> {
     for (const watcher of this.watchers) await watcher.close();
     this.watchers = [];
-    for (const timeout of this.envRescans.values()) clearTimeout(timeout);
-    this.envRescans.clear();
     if (this.server) {
       await new Promise<void>((resolve, reject) =>
         this.server!.close((error) => (error ? reject(error) : resolve())),
@@ -107,34 +96,24 @@ export class TraceServer {
   private async watch(root: IndexedRoot): Promise<FSWatcher> {
     const watcher = chokidar.watch(root.path, {
       ignoreInitial: true,
-      followSymlinks: false,
       ignored: root.filter.watcherIgnored,
     });
-    watcher.on("add", (file) => this.handleWatchEvent(root, file, false));
-    watcher.on("change", (file) => this.handleWatchEvent(root, file, false));
-    watcher.on("unlink", (file) => this.handleWatchEvent(root, file, true));
+    watcher.on("add", (file) => this.reconcile(root, file, false));
+    watcher.on("change", (file) => this.reconcile(root, file, false));
+    watcher.on("unlink", (file) => this.reconcile(root, file, true));
     await new Promise<void>((resolve) => watcher.once("ready", resolve));
     return watcher;
   }
 
-  private handleWatchEvent(root: IndexedRoot, file: string, removed: boolean): void {
+  /** Watcher callbacks must never take down the daemon. */
+  private reconcile(root: IndexedRoot, file: string, removed: boolean): void {
     const resolved = path.resolve(file);
-    const envDir = environmentDirectory(root.path, resolved);
-    if (envDir) {
-      const pending = this.envRescans.get(envDir);
-      if (pending) clearTimeout(pending);
-      this.envRescans.set(
-        envDir,
-        setTimeout(() => {
-          this.envRescans.delete(envDir);
-          indexRoot(root.id, root.filter, envDir);
-        }, 200),
-      );
-      return;
+    try {
+      if (removed) deleteFiles([resolved]);
+      else reindexFile(root.id, resolved);
+    } catch (error) {
+      process.stdout.write(`trace: failed to reconcile ${resolved}: ${error}\n`);
     }
-
-    if (removed) deleteFiles([resolved]);
-    else reindexFile(root.id, resolved);
   }
 
   private accept(socket: net.Socket): void {

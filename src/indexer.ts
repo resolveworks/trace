@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Parser, type Node as SyntaxNode } from "web-tree-sitter";
@@ -11,7 +10,9 @@ import {
   insertCall,
   insertSymbol,
   replaceFile,
+  sameContent,
   updateSymbolParent,
+  type ContentKey,
 } from "./db.ts";
 
 let parser: Parser | null = null;
@@ -46,11 +47,12 @@ export function indexRoot(rootId: number, filter: ProjectFilter, dir = filter.ro
   let changed = 0;
 
   for (const file of files) {
-    const lang = getLanguageForFile(file)!;
-    const sourceFile = readSourceFile(file);
-    if (indexed.get(file) === sourceFile.hash) continue;
+    const key = statContentKey(file);
+    if (!key) continue;
+    const current = indexed.get(file);
+    if (current && sameContent(current, key)) continue;
 
-    indexSourceFile(rootId, file, sourceFile, lang);
+    indexSourceFile(rootId, file, key);
     changed++;
   }
 
@@ -61,6 +63,49 @@ export function indexRoot(rootId: number, filter: ProjectFilter, dir = filter.ro
   deleteFiles(missing);
 
   return { files: files.length, changed, removed: missing.length };
+}
+
+/** Reconcile one file after a watcher event. */
+export function reindexFile(rootId: number, file: string): void {
+  getParser();
+  const key = statContentKey(file);
+  if (!key) {
+    deleteFiles([file]); // raced with a deletion
+    return;
+  }
+  indexSourceFile(rootId, file, key);
+}
+
+/** Content identity from a stat, following symlinks to the underlying file. */
+function statContentKey(file: string): ContentKey | null {
+  try {
+    const stats = fs.statSync(file, { bigint: true });
+    return { ino: stats.ino, size: stats.size, mtimeNs: stats.mtimeNs };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Point a file at its content, parsing only when the content has never been
+ * seen. A path whose inode is already known (hardlink, symlink, unchanged
+ * rewrite) is re-pointed without reading a single byte.
+ */
+function indexSourceFile(rootId: number, file: string, key: ContentKey): void {
+  const lang = getLanguageForFile(file);
+  if (!lang) throw new Error(`unsupported source file: ${file}`);
+  replaceFile(rootId, file, key, lang.name, (contentId) => {
+    const source = fs.readFileSync(file, "utf-8");
+    const activeParser = getParser();
+    activeParser.setLanguage(lang.language);
+    const tree = activeParser.parse(source);
+    if (!tree) throw new Error(`failed to parse source file: ${file}`);
+    try {
+      extractFromTree(tree.rootNode, contentId, lang);
+    } finally {
+      tree.delete();
+    }
+  });
 }
 
 interface ExtractedDef {
@@ -162,7 +207,7 @@ function collectFiles(
       }
     }
 
-    if (isDirectory && entry.name !== ".pnpm" && filter.includesDirectory(file)) {
+    if (isDirectory && filter.includesDirectory(file)) {
       const realpath = fs.realpathSync(file);
       if (visited.has(realpath)) continue;
       visited.add(realpath);
@@ -172,43 +217,4 @@ function collectFiles(
     }
   }
   return results;
-}
-
-interface SourceFile {
-  source: string;
-  hash: string;
-}
-
-function readSourceFile(file: string): SourceFile {
-  const source = fs.readFileSync(file, "utf-8");
-  return {
-    source,
-    hash: createHash("sha256").update(source).digest("hex"),
-  };
-}
-
-function indexSourceFile(
-  rootId: number,
-  file: string,
-  sourceFile: SourceFile,
-  lang: LoadedLang,
-): void {
-  replaceFile(rootId, file, sourceFile.hash, lang.name, (contentId) => {
-    const activeParser = getParser();
-    activeParser.setLanguage(lang.language);
-    const tree = activeParser.parse(sourceFile.source);
-    if (!tree) throw new Error(`failed to parse source file: ${file}`);
-    try {
-      extractFromTree(tree.rootNode, contentId, lang);
-    } finally {
-      tree.delete();
-    }
-  });
-}
-
-export function reindexFile(rootId: number, file: string): void {
-  getParser();
-  const lang = getLanguageForFile(file);
-  if (!lang) throw new Error(`unsupported source file: ${file}`);
-  indexSourceFile(rootId, file, readSourceFile(file), lang);
 }

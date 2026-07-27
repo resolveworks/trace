@@ -31,6 +31,14 @@ export class ProjectFilter {
 
   readonly watcherIgnored = (filePath: string, stats?: Stats): boolean => {
     if (!stats) return false;
+    // Chokidar passes lstat results: resolve symlinks to classify the target.
+    if (stats.isSymbolicLink()) {
+      try {
+        stats = fs.statSync(filePath);
+      } catch {
+        return true; // dangling symlink: nothing to watch
+      }
+    }
     return stats.isDirectory() ? !this.includesDirectory(filePath) : !this.includesFile(filePath);
   };
 
@@ -41,7 +49,9 @@ export class ProjectFilter {
     if (relative === ".." || relative.startsWith(`..${path.sep}`)) return true;
 
     const parts = relative.split(path.sep);
-    if (parts.includes(".git")) return true;
+    // .git is tooling; physical .pnpm stores are reached through their logical
+    // symlink paths instead, so packages are indexed and watched exactly once.
+    if (parts.includes(".git") || parts.includes(".pnpm")) return true;
     if (parts.some((part) => ENV_DIRS.has(part))) return false;
 
     const active: { directory: string; rules: Rules }[] = [];
