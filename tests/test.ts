@@ -175,6 +175,11 @@ const dependencyPhysical = write(
 const dependencyDirectory = path.join(rootA, "node_modules", "dep");
 fs.symlinkSync(path.dirname(dependencyPhysical), dependencyDirectory, "dir");
 const dependencyLogical = path.join(dependencyDirectory, "index.js");
+const dependencyAlias = write(
+  rootA,
+  "node_modules/dep-alias/index.js",
+  fs.readFileSync(dependencyPhysical, "utf-8"),
+);
 const venvModule = write(
   rootA,
   ".venv/lib/python3.12/site-packages/pkg/mod.py",
@@ -252,6 +257,24 @@ try {
   assert(
     resultText(dependencyFileDefinition).includes(`in ${dependencyLogical}:1-3`),
     "a dependency file can be scoped through its symlink path",
+  );
+
+  const originalCopyDefinition = await executeTool(
+    "def",
+    { name: "dependencyValue", path: dependencyLogical },
+    rootA,
+  );
+  const aliasCopyDefinition = await executeTool(
+    "def",
+    { name: "dependencyValue", path: dependencyAlias },
+    rootA,
+  );
+  assert(
+    resultText(originalCopyDefinition).includes(`in ${dependencyLogical}:1-3`) &&
+      !resultText(originalCopyDefinition).includes(dependencyAlias) &&
+      resultText(aliasCopyDefinition).includes(`in ${dependencyAlias}:1-3`) &&
+      !resultText(aliasCopyDefinition).includes(dependencyLogical),
+    "identical content remains independently queryable at each logical path",
   );
 
   const venvDefinition = await executeTool(

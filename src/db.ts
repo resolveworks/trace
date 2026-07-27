@@ -62,22 +62,39 @@ export function closeDb(): void {
 }
 
 function createSchema(database: DatabaseType): void {
+  if ((database.pragma("user_version", { simple: true }) as number) < 1) {
+    database.exec(`
+      DROP TABLE IF EXISTS calls;
+      DROP TABLE IF EXISTS symbols;
+      DROP TABLE IF EXISTS files;
+      DROP TABLE IF EXISTS contents;
+      DROP TABLE IF EXISTS roots;
+    `);
+  }
+
   database.exec(`
     CREATE TABLE IF NOT EXISTS roots (
       id INTEGER PRIMARY KEY,
       path TEXT NOT NULL UNIQUE
     );
 
+    CREATE TABLE IF NOT EXISTS contents (
+      id INTEGER PRIMARY KEY,
+      hash TEXT NOT NULL,
+      language TEXT NOT NULL,
+      UNIQUE(hash, language)
+    );
+
     CREATE TABLE IF NOT EXISTS files (
       id INTEGER PRIMARY KEY,
       root_id INTEGER NOT NULL REFERENCES roots(id) ON DELETE CASCADE,
       path TEXT NOT NULL UNIQUE,
-      hash TEXT NOT NULL
+      content_id INTEGER NOT NULL REFERENCES contents(id)
     );
 
     CREATE TABLE IF NOT EXISTS symbols (
       id INTEGER PRIMARY KEY,
-      file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+      content_id INTEGER NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       kind TEXT NOT NULL,
       start_line INTEGER NOT NULL,
@@ -87,7 +104,7 @@ function createSchema(database: DatabaseType): void {
 
     CREATE TABLE IF NOT EXISTS calls (
       id INTEGER PRIMARY KEY,
-      file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+      content_id INTEGER NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
       caller_id INTEGER REFERENCES symbols(id) ON DELETE CASCADE,
       callee_name TEXT NOT NULL,
       line INTEGER NOT NULL,
@@ -95,12 +112,15 @@ function createSchema(database: DatabaseType): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_files_root ON files(root_id);
+    CREATE INDEX IF NOT EXISTS idx_files_content ON files(content_id);
     CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
-    CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
+    CREATE INDEX IF NOT EXISTS idx_symbols_content ON symbols(content_id);
     CREATE INDEX IF NOT EXISTS idx_symbols_parent ON symbols(parent_id);
     CREATE INDEX IF NOT EXISTS idx_calls_callee ON calls(callee_name);
-    CREATE INDEX IF NOT EXISTS idx_calls_file ON calls(file_id);
+    CREATE INDEX IF NOT EXISTS idx_calls_content ON calls(content_id);
     CREATE INDEX IF NOT EXISTS idx_calls_caller ON calls(caller_id);
+
+    PRAGMA user_version = 1;
   `);
 }
 
@@ -120,6 +140,8 @@ export function syncRoots(paths: string[]): Map<string, number> {
     const insert = database.prepare("INSERT OR IGNORE INTO roots(path) VALUES (?)");
     for (const root of paths) insert.run(root);
 
+    deleteOrphanContents();
+
     const rows = database.prepare("SELECT id, path FROM roots").all() as {
       id: number;
       path: string;
@@ -131,7 +153,9 @@ export function syncRoots(paths: string[]): Map<string, number> {
 
 export function getIndexedFiles(rootId: number): Map<string, string> {
   const rows = requireDb()
-    .prepare("SELECT path, hash FROM files WHERE root_id = ?")
+    .prepare(
+      "SELECT f.path, c.hash FROM files f JOIN contents c ON c.id = f.content_id WHERE f.root_id = ?",
+    )
     .all(rootId) as { path: string; hash: string }[];
   return new Map(rows.map((row) => [row.path, row.hash]));
 }
@@ -140,20 +164,50 @@ export function replaceFile(
   rootId: number,
   file: string,
   hash: string,
-  extract: (fileId: number) => void,
+  language: string,
+  extract: (contentId: number) => void,
 ): void {
   const database = requireDb();
   database.transaction(() => {
-    database.prepare("DELETE FROM files WHERE path = ?").run(file);
-    const result = database
-      .prepare("INSERT INTO files(root_id, path, hash) VALUES (?, ?, ?)")
-      .run(rootId, file, hash);
-    extract(Number(result.lastInsertRowid));
+    const previous = database.prepare("SELECT content_id FROM files WHERE path = ?").get(file) as
+      | { content_id: number }
+      | undefined;
+    let content = database
+      .prepare("SELECT id FROM contents WHERE hash = ? AND language = ?")
+      .get(hash, language) as { id: number } | undefined;
+
+    if (!content) {
+      const result = database
+        .prepare("INSERT INTO contents(hash, language) VALUES (?, ?)")
+        .run(hash, language);
+      content = { id: Number(result.lastInsertRowid) };
+      extract(content.id);
+    }
+
+    database
+      .prepare(
+        `INSERT INTO files(root_id, path, content_id) VALUES (?, ?, ?)
+         ON CONFLICT(path) DO UPDATE SET root_id = excluded.root_id, content_id = excluded.content_id`,
+      )
+      .run(rootId, file, content.id);
+    if (previous && previous.content_id !== content.id) deleteOrphanContents();
   })();
 }
 
-export function deleteFile(file: string): void {
-  requireDb().prepare("DELETE FROM files WHERE path = ?").run(file);
+export function deleteOrphanContents(): void {
+  requireDb()
+    .prepare(
+      "DELETE FROM contents WHERE NOT EXISTS (SELECT 1 FROM files WHERE files.content_id = contents.id)",
+    )
+    .run();
+}
+
+export function deleteFile(file: string, collectOrphans = true): void {
+  const database = requireDb();
+  database.transaction(() => {
+    database.prepare("DELETE FROM files WHERE path = ?").run(file);
+    if (collectOrphans) deleteOrphanContents();
+  })();
 }
 
 export function isIndexedFile(file: string): boolean {
@@ -172,7 +226,7 @@ export function hasIndexedFileUnder(directory: string): boolean {
 }
 
 export function insertSymbol(
-  fileId: number,
+  contentId: number,
   name: string,
   kind: string,
   startLine: number,
@@ -181,9 +235,9 @@ export function insertSymbol(
 ): number {
   const result = requireDb()
     .prepare(
-      "INSERT INTO symbols (file_id, name, kind, start_line, end_line, parent_id) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO symbols (content_id, name, kind, start_line, end_line, parent_id) VALUES (?, ?, ?, ?, ?, ?)",
     )
-    .run(fileId, name, kind, startLine, endLine, parentId);
+    .run(contentId, name, kind, startLine, endLine, parentId);
   return Number(result.lastInsertRowid);
 }
 
@@ -192,7 +246,7 @@ export function updateSymbolParent(id: number, parentId: number): void {
 }
 
 export function insertCall(
-  fileId: number,
+  contentId: number,
   callerId: number | null,
   calleeName: string,
   line: number,
@@ -200,9 +254,9 @@ export function insertCall(
 ): void {
   requireDb()
     .prepare(
-      "INSERT INTO calls (file_id, caller_id, callee_name, line, end_line) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO calls (content_id, caller_id, callee_name, line, end_line) VALUES (?, ?, ?, ?, ?)",
     )
-    .run(fileId, callerId, calleeName, line, endLine);
+    .run(contentId, callerId, calleeName, line, endLine);
 }
 
 const IN_SCOPE = "(f.path = ? OR f.path GLOB ? || '/*')";
@@ -224,7 +278,7 @@ export function findDefinition(name: string, scope: string): Definition[] {
       `SELECT s.id, s.name, s.kind, f.path AS file, s.start_line, s.end_line, s.parent_id,
               p.name AS parent_name, p.kind AS parent_kind
        FROM symbols s
-       JOIN files f ON s.file_id = f.id
+       JOIN files f ON f.content_id = s.content_id
        LEFT JOIN symbols p ON s.parent_id = p.id
        WHERE s.name = ? AND ${IN_SCOPE}${environmentFilter(scope)}
        ORDER BY length(f.path), f.path, s.start_line`,
@@ -249,7 +303,7 @@ export function findCallers(name: string, scope: string): CallSite[] {
       `SELECT s.name AS caller_name, s.kind AS caller_kind, c.callee_name,
               f.path AS file, c.line, c.end_line
        FROM calls c
-       JOIN files f ON c.file_id = f.id
+       JOIN files f ON f.content_id = c.content_id
        LEFT JOIN symbols s ON c.caller_id = s.id
        WHERE c.callee_name = ? AND ${IN_SCOPE}${environmentFilter(scope)}
        ORDER BY length(f.path), f.path, c.line`,
@@ -270,7 +324,7 @@ export function getOutline(scope: string): DirSymbol[] {
     .prepare(
       `SELECT f.path AS file, s.id, s.name, s.kind, s.start_line, s.end_line, s.parent_id
        FROM symbols s
-       JOIN files f ON s.file_id = f.id
+       JOIN files f ON f.content_id = s.content_id
        WHERE ${IN_SCOPE}${environmentFilter(scope)}
        ORDER BY f.path, s.start_line`,
     )

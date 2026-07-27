@@ -6,6 +6,7 @@ import { getLanguageForFile, initializeLanguages, type LoadedLang } from "./lang
 import { ProjectFilter } from "./project-filter.ts";
 import {
   deleteFile,
+  deleteOrphanContents,
   getIndexedFiles,
   insertCall,
   insertSymbol,
@@ -59,10 +60,12 @@ export function indexRoot(rootId: number, filter: ProjectFilter, dir = filter.ro
     const isUnderDir =
       relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`));
     if (isUnderDir && !present.has(file)) {
-      deleteFile(file);
+      deleteFile(file, false);
       removed++;
     }
   }
+
+  if (removed > 0) deleteOrphanContents();
 
   return { files: files.length, changed, removed };
 }
@@ -75,7 +78,7 @@ interface ExtractedDef {
   endLine: number;
 }
 
-function extractFromTree(root: SyntaxNode, fileId: number, lang: LoadedLang): void {
+function extractFromTree(root: SyntaxNode, contentId: number, lang: LoadedLang): void {
   const defMap = new Map<string, ExtractedDef>();
   const refBuffer: { refNode: SyntaxNode; nameNode: SyntaxNode }[] = [];
 
@@ -101,7 +104,7 @@ function extractFromTree(root: SyntaxNode, fileId: number, lang: LoadedLang): vo
       if (!defMap.has(key)) {
         const kind = defNode.type;
         const endLine = defNode.endPosition.row + 1;
-        const dbId = insertSymbol(fileId, name, kind, startLine, endLine);
+        const dbId = insertSymbol(contentId, name, kind, startLine, endLine);
         defMap.set(key, { dbId, name, kind, startLine, endLine });
       }
     } else if (refNode && nameNode) {
@@ -118,7 +121,7 @@ function extractFromTree(root: SyntaxNode, fileId: number, lang: LoadedLang): vo
   for (const { refNode, nameNode } of refBuffer) {
     const line = refNode.startPosition.row + 1;
     const parent = findEnclosingDef(line, definitions);
-    insertCall(fileId, parent?.dbId ?? null, nameNode.text, line, refNode.endPosition.row + 1);
+    insertCall(contentId, parent?.dbId ?? null, nameNode.text, line, refNode.endPosition.row + 1);
   }
 }
 
@@ -197,17 +200,17 @@ function indexSourceFile(
   sourceFile: SourceFile,
   lang: LoadedLang,
 ): void {
-  const activeParser = getParser();
-  activeParser.setLanguage(lang.language);
-  const tree = activeParser.parse(sourceFile.source);
-  if (!tree) throw new Error(`failed to parse source file: ${file}`);
-  try {
-    replaceFile(rootId, file, sourceFile.hash, (fileId) => {
-      extractFromTree(tree.rootNode, fileId, lang);
-    });
-  } finally {
-    tree.delete();
-  }
+  replaceFile(rootId, file, sourceFile.hash, lang.name, (contentId) => {
+    const activeParser = getParser();
+    activeParser.setLanguage(lang.language);
+    const tree = activeParser.parse(sourceFile.source);
+    if (!tree) throw new Error(`failed to parse source file: ${file}`);
+    try {
+      extractFromTree(tree.rootNode, contentId, lang);
+    } finally {
+      tree.delete();
+    }
+  });
 }
 
 export function reindexFile(rootId: number, file: string): void {
