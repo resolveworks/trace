@@ -190,11 +190,13 @@ export function deleteOrphanContents(): void {
     .run();
 }
 
-export function deleteFile(file: string, collectOrphans = true): void {
+export function deleteFiles(files: string[]): void {
+  if (files.length === 0) return;
   const database = requireDb();
   database.transaction(() => {
-    database.prepare("DELETE FROM files WHERE path = ?").run(file);
-    if (collectOrphans) deleteOrphanContents();
+    const remove = database.prepare("DELETE FROM files WHERE path = ?");
+    for (const file of files) remove.run(file);
+    deleteOrphanContents();
   })();
 }
 
@@ -203,12 +205,11 @@ export function isIndexedFile(file: string): boolean {
 }
 
 export function hasIndexedFileUnder(directory: string): boolean {
-  const excludeEnvironments = scopeIncludesEnvironment(directory)
-    ? ""
-    : ` AND ${EXCLUDE_ENVIRONMENTS}`;
   return (
     requireDb()
-      .prepare(`SELECT 1 FROM files f WHERE f.path GLOB ? || '/*'${excludeEnvironments} LIMIT 1`)
+      .prepare(
+        `SELECT 1 FROM files f WHERE f.path GLOB ? || '/*'${environmentFilter(directory)} LIMIT 1`,
+      )
       .get(directory) !== undefined
   );
 }

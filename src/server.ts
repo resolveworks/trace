@@ -6,6 +6,7 @@ import { Value } from "typebox/value";
 import { getTraceDbPath, getTraceRoots, getTraceSocketPath, contains } from "./config.ts";
 import {
   closeDb,
+  deleteFiles,
   findCallers,
   findDefinition,
   getOutline,
@@ -14,7 +15,7 @@ import {
   openDb,
   syncRoots,
 } from "./db.ts";
-import { closeIndexer, indexRoot, initializeIndexer, reindexFile, removeFile } from "./indexer.ts";
+import { closeIndexer, indexRoot, initializeIndexer, reindexFile } from "./indexer.ts";
 import { closeLanguages } from "./languages.ts";
 import { ENV_DIRS, ProjectFilter } from "./project-filter.ts";
 import {
@@ -132,7 +133,7 @@ export class TraceServer {
       return;
     }
 
-    if (removed) removeFile(resolved);
+    if (removed) deleteFiles([resolved]);
     else reindexFile(root.id, resolved);
   }
 

@@ -4,9 +4,9 @@ import * as path from "node:path";
 import { Parser, type Node as SyntaxNode } from "web-tree-sitter";
 import { getLanguageForFile, initializeLanguages, type LoadedLang } from "./languages.ts";
 import { ProjectFilter } from "./project-filter.ts";
+import { contains } from "./config.ts";
 import {
-  deleteFile,
-  deleteOrphanContents,
+  deleteFiles,
   getIndexedFiles,
   insertCall,
   insertSymbol,
@@ -44,7 +44,6 @@ export function indexRoot(rootId: number, filter: ProjectFilter, dir = filter.ro
   const indexed = getIndexedFiles(rootId);
   const present = new Set(files);
   let changed = 0;
-  let removed = 0;
 
   for (const file of files) {
     const lang = getLanguageForFile(file)!;
@@ -55,19 +54,13 @@ export function indexRoot(rootId: number, filter: ProjectFilter, dir = filter.ro
     changed++;
   }
 
+  const missing: string[] = [];
   for (const file of indexed.keys()) {
-    const relative = path.relative(dir, file);
-    const isUnderDir =
-      relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`));
-    if (isUnderDir && !present.has(file)) {
-      deleteFile(file, false);
-      removed++;
-    }
+    if (contains(dir, file) && !present.has(file)) missing.push(file);
   }
+  deleteFiles(missing);
 
-  if (removed > 0) deleteOrphanContents();
-
-  return { files: files.length, changed, removed };
+  return { files: files.length, changed, removed: missing.length };
 }
 
 interface ExtractedDef {
@@ -218,8 +211,4 @@ export function reindexFile(rootId: number, file: string): void {
   const lang = getLanguageForFile(file);
   if (!lang) throw new Error(`unsupported source file: ${file}`);
   indexSourceFile(rootId, file, readSourceFile(file), lang);
-}
-
-export function removeFile(file: string): void {
-  deleteFile(file);
 }
