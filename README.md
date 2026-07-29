@@ -1,30 +1,98 @@
 # trace
 
-Deterministic, system-wide code navigation for [Pi](https://pi.dev). The extension uses tree-sitter and SQLite to answer common exploration questions without chains of `rg` and `read`.
+Trace adds deterministic code-navigation tools to [Pi](https://pi.dev), backed by tree-sitter and a persistent SQLite index.
 
-- **`def(name, path?)`** — return complete named source definitions.
-- **`callers(name, path?)`** — find syntactic call sites for a symbol.
-- **`outline(path?)`** — list symbols in a file or directory, including nested members.
+- **`def`** retrieves complete named definitions.
+- **`callers`** finds syntactic call sites.
+- **`outline`** lists the symbols in a file or directory.
 
-Every search has an explicit file or directory scope. The scope defaults to Pi's current working directory, a relative path resolves from that directory, and an absolute path can target any readable file or directory.
+Trace supports JavaScript, TypeScript/TSX, Python, and Rust.
 
-## Architecture
+## Install
 
-The Pi extension opens a persistent SQLite cache at `~/.pi/agent/extensions/trace/index.sqlite` and initializes tree-sitter when the session starts. It closes the database connection and parser resources when the session shuts down.
+Install directly from GitHub:
 
-Every operation invalidates cached ignore rules, reconciles exactly the requested file or directory, and then queries SQLite. Each result is therefore fresh for its requested scope; cached rows elsewhere may be stale until that scope is queried. Unchanged files are skipped by stat and identical content at different paths shares one parsed content row.
+```sh
+pi install git:github.com/resolveworks/trace
+```
 
-An invalid scope, traversal failure, indexing failure, or database failure is an error. The database has no migrations, compatibility handling, or automatic deletion. After a schema or extraction-contract change, stop Pi sessions using trace and manually remove `index.sqlite`, `index.sqlite-shm`, and `index.sqlite-wal`; subsequent queries repopulate the cache.
+To try a local checkout without installing it:
 
-Project scopes reconcile first-party source while preserving cached dependency rows. A request inside `node_modules` or `.venv` reconciles that exact logical subtree despite `.gitignore`, so dependencies are indexed entirely on demand. A query racing a filesystem rewrite or package installation may observe an intermediate state; the next query reconciles the scope again.
+```sh
+pnpm install --frozen-lockfile
+pnpm exec pi -e .
+```
 
-Currently supported languages: JavaScript, TypeScript/TSX, Python, and Rust.
+## Tools
+
+| Tool                   | Purpose                                                                              |
+| ---------------------- | ------------------------------------------------------------------------------------ |
+| `def(name, path?)`     | Return complete definitions named `name`, including their source and line range.     |
+| `callers(name, path?)` | Find syntactic calls to `name`, including their enclosing definition when available. |
+| `outline(path?)`       | Show the definitions in a file or directory as a nested outline.                     |
+
+For example, ask Pi to:
+
+```text
+Show me the definition of openDb in src.
+Find callers of reconcileFile in this project.
+Outline src/indexer.ts.
+Find the definition of parse in node_modules/typescript.
+```
+
+The optional path always defines the search scope:
+
+```text
+path omitted   → Pi's current working directory
+relative path  → resolved from Pi's current working directory
+absolute path  → used directly
+```
+
+## How indexing works
+
+Trace maintains its index at:
+
+```text
+~/.pi/agent/extensions/trace/index.sqlite
+```
+
+Before each tool runs, Trace reconciles the requested file or directory with the filesystem. Unchanged files are skipped using their size and modification time; changed content is hashed and parsed with tree-sitter. Identical content using the same grammar shares one parsed index entry.
+
+There is no daemon, configured source root, or startup scan. Any supported source file or readable directory can be queried directly.
+
+## Scope and path behavior
+
+- A file scope searches exactly that source file.
+- A directory scope searches supported source files beneath it.
+- Ancestor and nested `.gitignore` files are honored.
+- Logical routes containing `.git`, `.pnpm`, or `.pnpm-store` are excluded.
+- Project scopes do not enter `node_modules` or `.venv`.
+- A scope inside `node_modules` or `.venv` indexes that dependency subtree despite `.gitignore`.
+- Directory symlinks retain their logical paths, and separate aliases remain independently queryable.
+
+Empty directories and supported source files without definitions are valid and return no results. Missing paths, unsupported file scopes, and ignored file scopes are errors.
+
+## Semantics and limitations
+
+`callers` is intentionally syntactic. It recognizes call-shaped syntax but does not resolve imports, aliases, variable reassignments, types, or dynamic dispatch. This allows it to operate deterministically on incomplete, broken, and dependency source.
+
+Definition and enclosing-scope types are reported using the grammar's tree-sitter `Node.type` values, such as `function_declaration`, `method_definition`, or `function_item`.
+
+Large results use Pi's standard output limits. Narrow the path scope when output is truncated.
+
+## Cache compatibility
+
+The index is derived data and has no migrations or automatic compatibility handling. After a schema or extraction-contract change, stop active Pi sessions using Trace and remove the cache:
+
+```sh
+rm ~/.pi/agent/extensions/trace/index.sqlite{,-shm,-wal}
+```
+
+The next query recreates it.
 
 ## Development
 
-Requires Node.js 22.18 or newer (native TypeScript type stripping) and pnpm 11.3.0 (pinned in `package.json`).
-
-Grammar WASM files are supplied by the pinned `tree-sitter-*` npm packages; no local grammar checkout is required. Trace owns the extraction queries in `queries/`. JavaScript definitions and calls form the base for the composable TypeScript and JSX additions. Reported `node_type` values are the grammar's tree-sitter `Node.type` values.
+Requires Node.js 22.18 or newer and pnpm 11.3.0.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -33,28 +101,6 @@ pnpm test
 pnpm format:check
 ```
 
-Load the extension:
+Use `pnpm format` to apply formatting and `pnpm exec pi -e .` to load the checkout in Pi.
 
-```sh
-pnpm exec pi -e .
-```
-
-## Query semantics
-
-All three operations resolve their optional path to one absolute logical scope:
-
-```text
-path omitted   → Pi cwd
-relative path  → Pi cwd + path
-absolute path  → path
-```
-
-A file scope reconciles and matches exactly that source file. A directory scope reconciles and matches supported files beneath it; empty, ignored, and excluded directories are valid and return an empty result. Scopes must exist and be files or directories. A supported source file containing no symbols is valid; an ignored, unsupported, or file-symlink file scope is an error.
-
-Path filtering is lexical from the filesystem-volume root. Nested `.gitignore` files are honored from the volume root through the requested subtree. Logical routes containing `.git`, `.pnpm`, or `.pnpm-store` are always excluded. A package physically stored under `.pnpm` is still indexed when reached through an accepted project-visible path such as `node_modules/pkg`.
-
-Directory symlinks retain their logical paths. `(device, inode)` identity prevents only cycles already on the current ancestor chain, so separate non-cyclic logical aliases to one target are independently indexed and queryable. File symlinks are not indexed.
-
-Queries outside `node_modules` and `.venv` omit definitions and calls in those environments; a scope inside an environment includes and refreshes them.
-
-`callers` is intentionally syntactic. Tree-sitter does not resolve imports, aliases, variable reassignments, types, or dynamic dispatch. This trades semantic precision for deterministic operation on compiling, broken, and dependency source alike.
+Grammar WASM files come from the pinned `tree-sitter-*` packages. Trace's extraction queries live in `queries/`.

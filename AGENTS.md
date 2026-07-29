@@ -33,7 +33,7 @@ Use `pnpm format` to apply formatting. Run typecheck, tests, and the formatting 
 - Project scopes must not enter `node_modules` or `.venv`; those environments are indexed only when explicitly scoped. Logical routes containing `.git`, `.pnpm`, or `.pnpm-store` are always excluded.
 - Cache files by logical path and share parsed content by content hash and language. File stats are only a freshness hint for skipping unchanged files.
 - Treat only `ENOENT` and `ENOTDIR` reconciliation races as absence. Propagate other traversal, parsing, and database failures.
-- Tree-sitter queries use `@definition.<kind>`, `@reference.call`, and `@name`. Each definition and call site must match exactly once; extraction does not deduplicate query matches.
+- Tree-sitter queries use `@definition`, `@reference.call`, and `@name`. Each definition and call site must match exactly once; extraction does not deduplicate query matches. Definition types come from the captured node's tree-sitter `Node.type`.
 - The SQLite cache has no migrations, versioning, startup recovery, or automatic deletion. After changing its schema or extraction contract, stop active Trace sessions and manually remove `~/.pi/agent/extensions/trace/index.sqlite`, `index.sqlite-shm`, and `index.sqlite-wal`.
 
 ## Testing
