@@ -2,7 +2,7 @@
 
 Deterministic, system-wide code exploration primitives for Pi. A required per-user daemon maintains a persistent tree-sitter + SQLite cache and exposes three tools over a Unix socket.
 
-- **`def(name, path?)`** — return a function/class/method/type body as one unit.
+- **`def(name, path?)`** — return a complete named source definition as one unit.
 - **`callers(name, path?)`** — find syntactic call sites for a symbol.
 - **`outline(path?)`** — list symbols in a file or directory, including nested members.
 
@@ -25,7 +25,7 @@ trace/
 │   ├── languages.ts        # hardcoded grammar config
 │   ├── source-filter.ts    # absolute lexical policy and nested .gitignore filtering
 │   └── db.ts               # persistent path/content cache and scoped queries
-├── queries/jsx-tags.scm    # extra TSX tags: capitalized JSX elements as calls
+├── queries/*-tags.scm      # first-party extraction contracts for supported languages
 ├── systemd/traced.service
 └── tests/test.ts
 ```
@@ -33,7 +33,7 @@ trace/
 ## Design
 
 - Source paths require no configuration. Every query has an existing file or directory scope; omitted paths use Pi's current working directory. There is no global fallback search.
-- The daemon owns one persistent SQLite cache and never scans the filesystem at startup or watches it. Before every query it invalidates cached ignore rules, reconciles exactly the requested file or directory, validates the scope, and then queries SQLite. The schema is never migrated: on change, delete the database and let queries repopulate it.
+- The daemon owns one persistent SQLite cache and never scans the filesystem at startup or watches it. Before every query it invalidates cached ignore rules, reconciles exactly the requested file or directory, validates the scope, and then queries SQLite. Cached index data is never migrated: a cache-version mismatch deletes the database and lets queries repopulate it.
 - `node_modules` and `.venv` are dependency environments: indexed only when explicitly scoped despite `.gitignore`, stored at their logical (symlink-unresolved) paths, and excluded from queries whose scope is outside them. Non-environment reconciliation neither enters environments nor deletes their cached rows. A query racing package installation may see an intermediate state; the next scoped query reconciles again.
 - Lexical filtering starts at the filesystem-volume root so ancestor and nested `.gitignore` rules are deterministic for every scope. Logical routes containing `.git`, `.pnpm`, or `.pnpm-store` are never indexed. Packages physically stored under `.pnpm` remain available through accepted project-visible paths such as `node_modules/pkg`; exclusion decisions never use the resolved physical target.
 - Directory symlinks are traversed through each accepted logical path. `(device, inode)` identity prevents cycles only while a target is on the current ancestor chain; it never globally selects a winning alias. Independent non-cyclic aliases are independently cached and queryable. File symlinks are not indexed.

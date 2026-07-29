@@ -1,5 +1,5 @@
-; JSX element names that start with an uppercase letter are treated as component
-; references (i.e. function calls). Intrinsic elements (div, span, etc.) are ignored.
+; Capitalized opening and self-closing JSX tags are component calls.
+; Intrinsic and closing tags are intentionally ignored.
 
 (jsx_self_closing_element
   name: (identifier) @name

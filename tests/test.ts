@@ -130,6 +130,82 @@ const source = write(
   ].join("\n"),
 );
 const empty = write(projectA, "empty.ts", "// indexed, with no symbols\n");
+const typescriptContract = write(
+  projectA,
+  "contract/types.ts",
+  [
+    "interface Service {",
+    "  run(input: Input): Output;",
+    "}",
+    "interface Compact { ping(): void; ping(value: string): void; }",
+    "type Input = string;",
+    "type Output = Widget;",
+    "declare function create(input: Input): Service;",
+    "namespace API {",
+    "  export function declared(): void;",
+    "}",
+    "class Widget {}",
+    "function build(value: Widget): Service {",
+    "  const widget = new Widget();",
+    "  service.run(value);",
+    "  return widget;",
+    "}",
+    "function sameLine() { nested(); } topLevel();",
+    "",
+  ].join("\n"),
+);
+const tsxContract = write(
+  projectA,
+  "contract/view.tsx",
+  [
+    "function View() {",
+    "  return <section>",
+    "    <Button />",
+    "    <UI.Button></UI.Button>",
+    "    <button />",
+    "  </section>;",
+    "}",
+    "",
+  ].join("\n"),
+);
+const pythonContract = write(
+  projectA,
+  "contract/worker.py",
+  [
+    "class Worker:",
+    "    def work(self):",
+    "        helper()",
+    "        self.finish()",
+    "",
+    "def helper():",
+    "    return None",
+    "",
+  ].join("\n"),
+);
+const rustContract = write(
+  projectA,
+  "contract/engine.rs",
+  [
+    "struct Engine;",
+    "enum Mode { Fast }",
+    "union Value { integer: i32 }",
+    "type EngineAlias = Engine;",
+    "trait Runner {}",
+    "mod support {}",
+    "macro_rules! local_macro { () => {} }",
+    "",
+    "impl Runner for Engine {",
+    "    fn execute(&self) {",
+    "        helper();",
+    "        self.finish();",
+    '        println!("running");',
+    "    }",
+    "}",
+    "",
+    "fn helper() {}",
+    "",
+  ].join("\n"),
+);
 const sharedSource = write(
   projectA,
   "shared.ts",
@@ -267,6 +343,127 @@ try {
         "    increment (method) — 6-8",
       ].join("\n"),
     "outline accepts an absolute directory and renders nested symbols",
+  );
+
+  console.log("\nExtraction contract...");
+  const typescriptOutline = resultText(
+    await executeTool("outline", { path: typescriptContract }, projectA),
+  );
+  assert(
+    typescriptOutline ===
+      [
+        "Service (interface) — 1-3",
+        "  run (method) — 2-2",
+        "Compact (interface) — 4-4",
+        "  ping (method) — 4-4",
+        "  ping (method) — 4-4",
+        "Input (type_alias) — 5-5",
+        "Output (type_alias) — 6-6",
+        "create (function) — 7-7",
+        "API (internal_module) — 8-10",
+        "  declared (function) — 9-9",
+        "Widget (class) — 11-11",
+        "build (function) — 12-16",
+        "sameLine (function) — 17-17",
+      ].join("\n"),
+    "TypeScript interfaces, signatures, types, modules, classes, and functions are outlined",
+  );
+  const widgetCallers = resultText(
+    await executeTool("callers", { name: "Widget", path: typescriptContract }, projectA),
+  );
+  assert(
+    (widgetCallers.match(/called in/g) ?? []).length === 1 &&
+      widgetCallers.includes(`${typescriptContract}:13 — called in build (function_declaration)`) &&
+      widgetCallers.includes("new Widget()"),
+    "constructors are callers while TypeScript annotations are not",
+  );
+  const inputCallers = await executeTool(
+    "callers",
+    { name: "Input", path: typescriptContract },
+    projectA,
+  );
+  assert(
+    resultText(inputCallers) === 'No callers found for "Input"',
+    "TypeScript type references are not callers",
+  );
+  const nestedCallers = resultText(
+    await executeTool("callers", { name: "nested", path: typescriptContract }, projectA),
+  );
+  const topLevelCallers = resultText(
+    await executeTool("callers", { name: "topLevel", path: typescriptContract }, projectA),
+  );
+  assert(
+    nestedCallers.includes("called in sameLine (function_declaration)") &&
+      topLevelCallers.includes("called in (top-level)"),
+    "same-line calls are assigned by syntax boundaries rather than line range",
+  );
+
+  const tsxButtonCallers = resultText(
+    await executeTool("callers", { name: "Button", path: tsxContract }, projectA),
+  );
+  const intrinsicCallers = await executeTool(
+    "callers",
+    { name: "button", path: tsxContract },
+    projectA,
+  );
+  assert(
+    (tsxButtonCallers.match(/called in/g) ?? []).length === 2 &&
+      tsxButtonCallers.includes("<Button />") &&
+      tsxButtonCallers.includes("<UI.Button>") &&
+      resultText(intrinsicCallers) === 'No callers found for "button"',
+    "TSX components include simple and member tags without closers or intrinsic tags",
+  );
+
+  const pythonOutline = resultText(
+    await executeTool("outline", { path: pythonContract }, projectA),
+  );
+  const pythonHelperCallers = resultText(
+    await executeTool("callers", { name: "helper", path: pythonContract }, projectA),
+  );
+  const pythonMemberCallers = resultText(
+    await executeTool("callers", { name: "finish", path: pythonContract }, projectA),
+  );
+  assert(
+    pythonOutline ===
+      ["Worker (class) — 1-4", "  work (function) — 2-4", "helper (function) — 6-7"].join("\n") &&
+      pythonHelperCallers.includes("called in work (function_definition)") &&
+      pythonMemberCallers.includes("self.finish()"),
+    "Python classes, functions, and direct and member calls are extracted",
+  );
+
+  const rustOutline = resultText(await executeTool("outline", { path: rustContract }, projectA));
+  const rustHelperCallers = resultText(
+    await executeTool("callers", { name: "helper", path: rustContract }, projectA),
+  );
+  const rustMemberCallers = resultText(
+    await executeTool("callers", { name: "finish", path: rustContract }, projectA),
+  );
+  const rustMacroCallers = resultText(
+    await executeTool("callers", { name: "println", path: rustContract }, projectA),
+  );
+  const rustImplCallers = await executeTool(
+    "callers",
+    { name: "Runner", path: rustContract },
+    projectA,
+  );
+  assert(
+    rustOutline ===
+      [
+        "Engine (struct_item) — 1-1",
+        "Mode (enum_item) — 2-2",
+        "Value (union_item) — 3-3",
+        "EngineAlias (type_item) — 4-4",
+        "Runner (trait_item) — 5-5",
+        "support (mod_item) — 6-6",
+        "local_macro (macro) — 7-7",
+        "execute (function_item) — 10-14",
+        "helper (function_item) — 17-17",
+      ].join("\n") &&
+      rustHelperCallers.includes("called in execute (function_item)") &&
+      rustMemberCallers.includes("self.finish()") &&
+      rustMacroCallers.includes('println!("running")') &&
+      resultText(rustImplCallers) === 'No callers found for "Runner"',
+    "Rust types, functions, methods, macros, and calls exclude impl references",
   );
 
   console.log("\nDependency environments...");

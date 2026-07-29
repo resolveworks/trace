@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import Database from "better-sqlite3";
 import type { Database as DatabaseType, Statement } from "better-sqlite3";
 
@@ -51,6 +52,10 @@ export interface FileStat {
 export function sameStat(a: FileStat, b: FileStat): boolean {
   return a.size === b.size && a.mtimeNs === b.mtimeNs;
 }
+
+// Bump whenever schema or extraction semantics change. A mismatch discards the
+// whole derived cache; trace never migrates cached index data.
+const CACHE_VERSION = 1;
 
 let db: DatabaseType | null = null;
 let statements: Statements | null = null;
@@ -119,10 +124,21 @@ function prepareStatements(database: DatabaseType): Statements {
 
 export function openDb(file: string): void {
   if (db) throw new Error("trace database is already open");
-  db = new Database(file);
+  const existed = fs.existsSync(file);
+  let database = new Database(file);
+  const version = Number(database.pragma("user_version", { simple: true }));
+  const cacheIsCurrent = version === CACHE_VERSION;
+  if (existed && !cacheIsCurrent) {
+    database.close();
+    for (const suffix of ["", "-shm", "-wal"]) fs.rmSync(`${file}${suffix}`, { force: true });
+    database = new Database(file);
+  }
+
+  db = database;
   db.pragma("foreign_keys = ON");
   db.pragma("journal_mode = WAL");
   createSchema(db);
+  if (!cacheIsCurrent) db.pragma(`user_version = ${CACHE_VERSION}`);
   statements = prepareStatements(db);
 }
 

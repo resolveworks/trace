@@ -129,6 +129,8 @@ interface ExtractedDef {
   kind: string;
   startLine: number;
   endLine: number;
+  startIndex: number;
+  endIndex: number;
 }
 
 function extractFromTree(root: SyntaxNode, contentId: number, lang: LoadedLang): void {
@@ -143,7 +145,7 @@ function extractFromTree(root: SyntaxNode, contentId: number, lang: LoadedLang):
     for (const capture of match.captures) {
       if (capture.name.startsWith("definition.")) {
         defNode = capture.node;
-      } else if (capture.name.startsWith("reference.")) {
+      } else if (capture.name === "reference.call") {
         refNode = capture.node;
       } else if (capture.name === "name") {
         nameNode = capture.node;
@@ -153,12 +155,20 @@ function extractFromTree(root: SyntaxNode, contentId: number, lang: LoadedLang):
     if (defNode && nameNode) {
       const name = nameNode.text;
       const startLine = defNode.startPosition.row + 1;
-      const key = `${name}|${startLine}`;
+      const key = `${name}|${defNode.startIndex}`;
       if (!defMap.has(key)) {
         const kind = defNode.type;
         const endLine = defNode.endPosition.row + 1;
         const dbId = insertSymbol(contentId, name, kind, startLine, endLine);
-        defMap.set(key, { dbId, name, kind, startLine, endLine });
+        defMap.set(key, {
+          dbId,
+          name,
+          kind,
+          startLine,
+          endLine,
+          startIndex: defNode.startIndex,
+          endIndex: defNode.endIndex,
+        });
       }
     } else if (refNode && nameNode) {
       refBuffer.push({ refNode, nameNode });
@@ -167,19 +177,25 @@ function extractFromTree(root: SyntaxNode, contentId: number, lang: LoadedLang):
 
   const definitions = [...defMap.values()];
   for (const definition of definitions) {
-    const parent = findEnclosingDef(definition.startLine, definitions, definition.dbId);
+    const parent = findEnclosingDef(
+      definition.startIndex,
+      definition.endIndex,
+      definitions,
+      definition.dbId,
+    );
     if (parent) updateSymbolParent(definition.dbId, parent.dbId);
   }
 
   for (const { refNode, nameNode } of refBuffer) {
     const line = refNode.startPosition.row + 1;
-    const parent = findEnclosingDef(line, definitions);
+    const parent = findEnclosingDef(refNode.startIndex, refNode.endIndex, definitions);
     insertCall(contentId, parent?.dbId ?? null, nameNode.text, line, refNode.endPosition.row + 1);
   }
 }
 
 function findEnclosingDef(
-  line: number,
+  startIndex: number,
+  endIndex: number,
   definitions: ExtractedDef[],
   excludeId?: number,
 ): ExtractedDef | null {
@@ -187,8 +203,12 @@ function findEnclosingDef(
   let bestSize = Infinity;
   for (const definition of definitions) {
     if (definition.dbId === excludeId) continue;
-    if (line >= definition.startLine && line <= definition.endLine) {
-      const size = definition.endLine - definition.startLine;
+    const strictlyContains =
+      startIndex >= definition.startIndex &&
+      endIndex <= definition.endIndex &&
+      (startIndex > definition.startIndex || endIndex < definition.endIndex);
+    if (strictlyContains) {
+      const size = definition.endIndex - definition.startIndex;
       if (size < bestSize) {
         bestSize = size;
         best = definition;

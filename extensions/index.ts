@@ -13,17 +13,19 @@ import { getTraceSocketPath } from "../src/paths.ts";
 import type { DirSymbol, OutlineSymbol } from "../src/db.ts";
 
 const FUNCTION_LIKE_KINDS = new Set([
+  "abstract_method_signature",
+  "assignment_expression",
   "function_declaration",
+  "function_definition",
   "function_expression",
+  "function_item",
+  "function_signature",
   "generator_function",
   "generator_function_declaration",
   "method_definition",
   "method_signature",
-  "abstract_method_signature",
-  "lexical_declaration",
-  "variable_declaration",
-  "assignment_expression",
   "pair",
+  "variable_declarator",
 ]);
 
 function shortKind(kind: string): string {
@@ -87,10 +89,10 @@ export default function (pi: ExtensionAPI) {
     name: "def",
     label: "Definition",
     description:
-      "Retrieve complete source bodies of named functions, classes, methods, types, interfaces, or enums from the system-wide trace index. Search is scoped to the supplied file or directory, or the current working directory by default. Returns absolute file paths and exact line ranges.",
-    promptSnippet: "Get the full implementation of a named symbol",
+      "Retrieve complete source bodies of named definitions from the system-wide trace index. Search is scoped to the supplied file or directory, or the current working directory by default. Returns absolute file paths and exact line ranges.",
+    promptSnippet: "Get the complete source definition of a named symbol",
     promptGuidelines: [
-      "Use def when you know a symbol name and need its implementation. Pass path to search another source file, directory, project, or dependency.",
+      "Use def when you know a symbol name and need its source definition. Pass path to search another source file, directory, project, or dependency.",
       'Query installed dependencies at their project-visible paths, e.g. def("get", ".venv/lib/python3.12/site-packages/httpx") or def("parse", "node_modules/typescript"). Project-scoped searches exclude dependency code unless the path points into it.',
     ],
     parameters: Type.Object({
@@ -147,14 +149,14 @@ export default function (pi: ExtensionAPI) {
     name: "callers",
     label: "Callers",
     description:
-      "Find syntactic call sites for a function or method in the system-wide trace index. Search is scoped to the supplied file or directory, or the current working directory by default. Returns absolute file paths, line numbers, and enclosing scopes. Does not resolve types, imports, aliases, or variable reassignments.",
-    promptSnippet: "Find all invocations of a named function or method",
+      "Find syntactic call sites for a named symbol in the system-wide trace index. Search is scoped to the supplied file or directory, or the current working directory by default. Returns absolute file paths, line numbers, and enclosing scopes. Does not resolve types, imports, aliases, or variable reassignments.",
+    promptSnippet: "Find all syntactic invocations of a named callable",
     promptGuidelines: [
       "Use callers to find syntactic invocations of a symbol. Pass path to search another source file, directory, project, or dependency.",
       "Query installed dependencies at their project-visible paths, e.g. node_modules/<pkg> or .venv/lib/python3.x/site-packages/<pkg>. Project-scoped searches exclude dependency code unless the path points into it.",
     ],
     parameters: Type.Object({
-      name: Type.String({ description: "Name of the function or method" }),
+      name: Type.String({ description: "Name of the callable symbol" }),
       path: pathParameter(),
     }),
     renderCall(args, theme) {

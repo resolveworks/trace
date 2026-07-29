@@ -2,7 +2,7 @@
 
 Deterministic, system-wide code navigation for [Pi](https://pi.dev). A persistent daemon uses tree-sitter and SQLite to answer common exploration questions without chains of `rg` and `read`.
 
-- **`def(name, path?)`** — return complete function, class, method, type, interface, or enum bodies.
+- **`def(name, path?)`** — return complete named source definitions.
 - **`callers(name, path?)`** — find syntactic call sites for a symbol.
 - **`outline(path?)`** — list symbols in a file or directory, including nested members.
 
@@ -17,7 +17,7 @@ Every tool uses Pi's current working directory when `path` is omitted. A relativ
 - the tree-sitter parsers, and
 - a Unix socket at `~/.pi/agent/extensions/trace/trace.sock`.
 
-The Pi extension is only an IPC client. It does not create an in-memory index, start the daemon, retry failed requests, or fall back to project-local behavior. A missing daemon, invalid scope, traversal failure, indexing failure, or database failure is an error. The database has no schema versioning: after a schema change, delete it and let queries repopulate it.
+The Pi extension is only an IPC client. It does not create an in-memory index, start the daemon, retry failed requests, or fall back to project-local behavior. A missing daemon, invalid scope, traversal failure, indexing failure, or database failure is an error. The database is a disposable, versioned cache. A schema or extraction-contract version mismatch deletes it and lets queries repopulate it; cached index data is never migrated.
 
 The daemon does not scan the filesystem at startup or watch it. Before every operation it invalidates cached ignore rules and reconciles exactly the requested file or directory, then queries SQLite. Each result is therefore fresh for its requested scope; cached rows elsewhere may be stale until that scope is queried. Unchanged files are skipped by stat and identical content at different paths shares one parsed content row.
 
@@ -53,7 +53,7 @@ The service deliberately has no restart loop or compatibility mode. Startup fail
 
 Requires Node.js 22.18 or newer (native TypeScript type stripping) and pnpm 11.3.0 (pinned in `package.json`).
 
-Grammar WASM files and tag queries are supplied by the `tree-sitter-*` npm grammar packages; no local grammar checkout is required. TSX additionally uses the repo-local `queries/jsx-tags.scm`, which tags capitalized JSX elements as call references.
+Grammar WASM files are supplied by the pinned `tree-sitter-*` npm packages; no local grammar checkout is required. Trace owns the extraction queries in `queries/`. JavaScript definitions and calls form the base for the composable TypeScript and JSX additions.
 
 ```sh
 pnpm install --frozen-lockfile
