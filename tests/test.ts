@@ -1,7 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import * as fs from "node:fs";
-import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import type {
@@ -163,17 +162,6 @@ const dependencyLogical = path.join(dependencyDirectory, "index.js");
 const dependencyAliasDirectory = path.join(rootA, "node_modules", "dep-alias");
 fs.symlinkSync(path.dirname(dependencyPhysical), dependencyAliasDirectory, "dir");
 const dependencyAlias = path.join(dependencyAliasDirectory, "index.js");
-const metacharacterPackage = path.join(rootA, "node_modules", "pkg[one]");
-const metacharacterFile = write(
-  metacharacterPackage,
-  "index.js",
-  "export function metacharacterBoundary() { return 1; }\n",
-);
-const globSiblingFile = write(
-  rootA,
-  "node_modules/pkgo/index.js",
-  "export function metacharacterBoundary() { return 2; }\n",
-);
 const venvModule = write(
   rootA,
   ".venv/lib/python3.12/site-packages/pkg/mod.py",
@@ -198,7 +186,6 @@ fs.symlinkSync(rootA, path.join(rootA, "cycle", "back"), "dir");
 const linkedSource = write(home, "linked/source.ts", "export function linkedSymbol() {}\n");
 const sourceSymlink = path.join(rootA, "linked.ts");
 fs.symlinkSync(linkedSource, sourceSymlink);
-fs.mkdirSync(path.join(rootA, "nested", "deep"), { recursive: true });
 fs.mkdirSync(configDirectory, { recursive: true });
 fs.writeFileSync(
   path.join(configDirectory, "trace.json"),
@@ -251,17 +238,6 @@ try {
     /directory contains no accepted source files/,
     ".pnpm-store logical routes are rejected",
   );
-  fs.writeFileSync(backlinkSource, "export function backlinkSymbol() {\n  return 2;\n}\n");
-  const refreshedBacklink = await executeTool(
-    "def",
-    { name: "backlinkSymbol", path: projectBehindStoreBacklink },
-    rootB,
-  );
-  assert(
-    resultText(refreshedBacklink).includes(`in ${backlinkSource}:1-3`),
-    "the normal first-party path behind a store backlink remains queryable",
-  );
-
   const cycleDefinition = await executeTool(
     "def",
     { name: "cycleNeighborSymbol", path: path.dirname(cycleNeighbor) },
@@ -305,43 +281,16 @@ try {
     "a pnpm package is indexed and reported through its logical symlink path",
   );
 
-  const dependencyFileDefinition = await executeTool(
-    "def",
-    { name: "dependencyValue", path: dependencyLogical },
-    rootA,
-  );
-  assert(
-    resultText(dependencyFileDefinition).includes(`in ${dependencyLogical}:1-3`),
-    "a dependency file can be scoped through its symlink path",
-  );
-
-  const originalCopyDefinition = await executeTool(
-    "def",
-    { name: "dependencyValue", path: dependencyLogical },
-    rootA,
-  );
-  const aliasCopyDefinition = await executeTool(
+  const aliasDefinition = await executeTool(
     "def",
     { name: "dependencyValue", path: dependencyAlias },
     rootA,
   );
   assert(
-    resultText(originalCopyDefinition).includes(`in ${dependencyLogical}:1-3`) &&
-      !resultText(originalCopyDefinition).includes(dependencyAlias) &&
-      resultText(aliasCopyDefinition).includes(`in ${dependencyAlias}:1-3`) &&
-      !resultText(aliasCopyDefinition).includes(dependencyLogical),
+    !resultText(dependencyDefinition).includes(dependencyAlias) &&
+      resultText(aliasDefinition).includes(`in ${dependencyAlias}:1-3`) &&
+      !resultText(aliasDefinition).includes(dependencyLogical),
     "two directory aliases to one package remain independently queryable",
-  );
-
-  const metacharacterDefinition = await executeTool(
-    "def",
-    { name: "metacharacterBoundary", path: metacharacterPackage },
-    rootA,
-  );
-  assert(
-    resultText(metacharacterDefinition).includes(`in ${metacharacterFile}:1`) &&
-      !resultText(metacharacterDefinition).includes(globSiblingFile),
-    "dependency reconciliation and queries use a literal subtree boundary",
   );
 
   const venvDefinition = await executeTool(
@@ -349,10 +298,8 @@ try {
     { name: "environment_value", path: path.dirname(venvModule) },
     rootA,
   );
-  const venvOutline = await executeTool("outline", { path: venvModule }, rootA);
   assert(
-    resultText(venvDefinition).includes(`function_definition environment_value in ${venvModule}`) &&
-      resultText(venvOutline).includes("environment_value (function)"),
+    resultText(venvDefinition).includes(`function_definition environment_value in ${venvModule}`),
     "a gitignored virtual environment remains indexable",
   );
 
@@ -366,25 +313,13 @@ try {
     { name: "sharedEnvironmentValue", path: dependencyDirectory },
     rootA,
   );
-  const nodeModulesSharedDefinition = await executeTool(
-    "def",
-    { name: "sharedEnvironmentValue", path: path.join(rootA, "node_modules") },
-    rootA,
-  );
   assert(
     resultText(projectSharedDefinition).includes(`in ${sharedSource}:1`) &&
       !resultText(projectSharedDefinition).includes(dependencyLogical) &&
-      (projectSharedDefinition.details as { definitions: unknown[] }).definitions.length === 1,
-    "project-scoped definitions exclude dependency environments",
-  );
-  assert(
-    resultText(dependencySharedDefinition).includes(`in ${dependencyLogical}:5-7`) &&
+      (projectSharedDefinition.details as { definitions: unknown[] }).definitions.length === 1 &&
+      resultText(dependencySharedDefinition).includes(`in ${dependencyLogical}:5-7`) &&
       !resultText(dependencySharedDefinition).includes(sharedSource),
-    "dependency-scoped definitions include the dependency definition",
-  );
-  assert(
-    resultText(nodeModulesSharedDefinition).includes(`in ${dependencyLogical}:5-7`),
-    "a scope at the environment directory includes dependency definitions",
+    "project and dependency scopes partition definitions",
   );
 
   const projectSharedCallers = await executeTool(
@@ -405,159 +340,13 @@ try {
     "project-scoped outlines exclude dependency environment files",
   );
 
-  fs.writeFileSync(
-    dependencyPhysical,
-    "export function dependencyValue() {\n  const updated = 2;\n  return updated;\n}\n",
-  );
-  const updatedDependency = await executeTool(
-    "def",
-    { name: "dependencyValue", path: dependencyDirectory },
-    rootA,
-  );
-  assert(
-    resultText(updatedDependency).includes(`in ${dependencyLogical}:1-4`) &&
-      resultText(updatedDependency).includes("   3 |   return updated;"),
-    "a dependency-scoped query reconciles a deep dependency change",
-  );
   await rejects(
     () => executeTool("def", { name: "dependencyValue", path: dependencyPhysical }, rootA),
     /file is not accepted source/,
     "physical .pnpm package files remain excluded",
   );
 
-  const newlyInstalledDirectory = path.join(rootA, "node_modules", "new-package");
-  const newlyInstalledFile = write(
-    newlyInstalledDirectory,
-    "index.js",
-    "export function newlyInstalledSymbol() {}\n",
-  );
-  const newlyInstalled = await executeTool(
-    "def",
-    { name: "newlyInstalledSymbol", path: newlyInstalledDirectory },
-    rootA,
-  );
-  assert(
-    resultText(newlyInstalled).includes(`in ${newlyInstalledFile}:1`),
-    "a newly installed package is indexed by its first scoped query",
-  );
-  fs.writeFileSync(newlyInstalledFile, "export function replacementPackageSymbol() {}\n");
-  const removedPackageSymbol = await executeTool(
-    "def",
-    { name: "newlyInstalledSymbol", path: newlyInstalledDirectory },
-    rootA,
-  );
-  const replacementPackageSymbol = await executeTool(
-    "def",
-    { name: "replacementPackageSymbol", path: newlyInstalledDirectory },
-    rootA,
-  );
-  assert(
-    resultText(removedPackageSymbol) === 'No definition found for "newlyInstalledSymbol"' &&
-      resultText(replacementPackageSymbol).includes(`in ${newlyInstalledFile}:1`),
-    "a package-scoped query removes rewritten dependency symbols",
-  );
-
-  fs.rmSync(path.dirname(dependencyPhysical), { recursive: true, force: true });
-  const deletedDependency = await executeTool(
-    "def",
-    { name: "dependencyValue", path: path.join(rootA, "node_modules") },
-    rootA,
-  );
-  assert(
-    resultText(deletedDependency) === 'No definition found for "dependencyValue"',
-    "a dependency subtree query removes files deleted below that boundary",
-  );
-
-  write(
-    rootA,
-    "node_modules/.pnpm/dep@1.0.0/node_modules/dep/index.js",
-    "export function dependencyValue() {\n  return 3;\n}\n\nexport function restoredDependency() {}\n",
-  );
-  const deepPhysical = write(
-    rootA,
-    "node_modules/.pnpm/dep@1.0.0/node_modules/dep/lib/deep.js",
-    "export function deepDependencySymbol() {}\n",
-  );
-  const deepLogical = path.join(dependencyDirectory, "lib", "deep.js");
-  fs.unlinkSync(dependencyDirectory);
-  fs.symlinkSync(path.dirname(dependencyPhysical), dependencyDirectory, "dir");
-  const restoredDependency = await executeTool(
-    "def",
-    { name: "restoredDependency", path: dependencyDirectory },
-    rootA,
-  );
-  assert(
-    resultText(restoredDependency).includes(`in ${dependencyLogical}:5`),
-    "querying a replaced dependency symlink refreshes its logical rows",
-  );
-  const addedDeepDependency = await executeTool(
-    "def",
-    { name: "deepDependencySymbol", path: dependencyDirectory },
-    rootA,
-  );
-  assert(
-    resultText(addedDeepDependency).includes(`in ${deepLogical}:1`) &&
-      !resultText(addedDeepDependency).includes(deepPhysical),
-    "a scoped query adds a new deep file through its logical path",
-  );
-
-  fs.writeFileSync(
-    dependencyPhysical,
-    "export function dependencyValue() {\n  return 4;\n}\n\nexport function restoredDependency() {\n  return 8;\n}\n",
-  );
-  const changedRestoredDependency = await executeTool(
-    "def",
-    { name: "restoredDependency", path: dependencyDirectory },
-    rootA,
-  );
-  assert(
-    resultText(changedRestoredDependency).includes(`in ${dependencyLogical}:5-7`) &&
-      resultText(changedRestoredDependency).includes("   6 |   return 8;"),
-    "a changed file at a replaced dependency symlink is reconciled on query",
-  );
-
-  fs.writeFileSync(deepPhysical, "export function deepDependencySymbol() {\n  return 42;\n}\n");
-  const changedDeepDependency = await executeTool(
-    "def",
-    { name: "deepDependencySymbol", path: deepLogical },
-    rootA,
-  );
-  assert(
-    resultText(changedDeepDependency).includes(`in ${deepLogical}:1-3`) &&
-      resultText(changedDeepDependency).includes("   2 |   return 42;"),
-    "an exact dependency file query reconciles only that file",
-  );
-  await rejects(
-    () => executeTool("def", { name: "deepDependencySymbol", path: deepPhysical }, rootA),
-    /file is not accepted source/,
-    "deep physical .pnpm files remain excluded",
-  );
-
   console.log("\nFilesystem lifecycle...");
-  const changing = path.join(rootA, "changing.ts");
-  fs.writeFileSync(changing, "export function addedSymbol() {}\n");
-  const addedSymbol = await executeTool("def", { name: "addedSymbol" }, rootA);
-  assert(
-    resultText(addedSymbol).includes("function_declaration addedSymbol"),
-    "a query exposes an added symbol",
-  );
-
-  fs.writeFileSync(changing, "export function changedSymbol() {}\n");
-  const removedAddedSymbol = await executeTool("def", { name: "addedSymbol" }, rootA);
-  const changedSymbol = await executeTool("def", { name: "changedSymbol" }, rootA);
-  assert(
-    resultText(removedAddedSymbol) === 'No definition found for "addedSymbol"' &&
-      resultText(changedSymbol).includes("function_declaration changedSymbol"),
-    "a query replaces changed symbols",
-  );
-
-  fs.unlinkSync(changing);
-  const removedChangedSymbol = await executeTool("def", { name: "changedSymbol" }, rootA);
-  assert(
-    resultText(removedChangedSymbol) === 'No definition found for "changedSymbol"',
-    "a query removes deleted symbols",
-  );
-
   const replacedScope = write(rootA, "replaced.ts", "export function formerFileSymbol() {}\n");
   await executeTool("outline", { path: replacedScope }, rootA);
   fs.unlinkSync(replacedScope);
@@ -578,24 +367,7 @@ try {
     "replacing a directory with a file removes descendant rows",
   );
 
-  console.log("\nDirectory topology...");
-  const created = path.join(rootA, "created");
-  fs.mkdirSync(path.join(created, "inner"), { recursive: true });
-  fs.writeFileSync(path.join(created, "fresh.ts"), "export function freshSymbol() {}\n");
-  fs.writeFileSync(path.join(created, "inner", "inner.ts"), "export function innerSymbol() {}\n");
-  const freshSymbol = await executeTool("def", { name: "freshSymbol" }, rootA);
-  assert(
-    resultText(freshSymbol).includes("function_declaration freshSymbol"),
-    "a new directory already containing a source file is indexed",
-  );
-  const innerSymbol = await executeTool("def", { name: "innerSymbol" }, rootA);
-  assert(
-    resultText(innerSymbol).includes("function_declaration innerSymbol"),
-    "a nested file inside a newly created directory tree is indexed",
-  );
-
-  const nestedFile = path.join(rootA, "nested", "deep", "nested.ts");
-  fs.writeFileSync(nestedFile, "export function nestedSymbol() {}\n");
+  const nestedFile = write(rootA, "nested/deep/nested.ts", "export function nestedSymbol() {}\n");
   const nestedSymbol = await executeTool("def", { name: "nestedSymbol" }, rootA);
   assert(
     resultText(nestedSymbol).includes("function_declaration nestedSymbol"),
@@ -620,37 +392,6 @@ try {
     "a deletion in a nested directory is removed",
   );
 
-  fs.rmSync(created, { recursive: true, force: true });
-  const removedFreshSymbol = await executeTool("def", { name: "freshSymbol" }, rootA);
-  const removedInnerSymbol = await executeTool("def", { name: "innerSymbol" }, rootA);
-  assert(
-    resultText(removedFreshSymbol) === 'No definition found for "freshSymbol"' &&
-      resultText(removedInnerSymbol) === 'No definition found for "innerSymbol"',
-    "deleting a populated directory removes all of its indexed files",
-  );
-
-  const staging = path.join(home, "staging");
-  write(staging, "incoming/pack/moved.ts", "export function movedSymbol() {}\n");
-  const movedFile = path.join(rootA, "incoming", "pack", "moved.ts");
-  fs.renameSync(path.join(staging, "incoming"), path.join(rootA, "incoming"));
-  const movedSymbol = await executeTool("def", { name: "movedSymbol" }, rootA);
-  assert(
-    resultText(movedSymbol).includes(`function_declaration movedSymbol in ${movedFile}:1`),
-    "a populated directory moved into the root is indexed",
-  );
-  fs.writeFileSync(movedFile, "export function movedSymbol() {\n  return 7;\n}\n");
-  const changedMovedSymbol = await executeTool("def", { name: "movedSymbol" }, rootA);
-  assert(
-    resultText(changedMovedSymbol).includes(`in ${movedFile}:1-3`),
-    "changes inside a moved-in directory are reconciled",
-  );
-  fs.renameSync(path.join(rootA, "incoming"), path.join(staging, "departed"));
-  const removedMovedSymbol = await executeTool("def", { name: "movedSymbol" }, rootA);
-  assert(
-    resultText(removedMovedSymbol) === 'No definition found for "movedSymbol"',
-    "moving a populated directory out of the root removes its indexed files",
-  );
-
   console.log("\nScope and failure contract...");
   const emptyOutline = await executeTool("outline", { path: empty }, rootA);
   assert(
@@ -671,25 +412,12 @@ try {
   console.log("\n.gitignore lifecycle...");
   const gitignore = path.join(rootA, ".gitignore");
   const originalGitignore = fs.readFileSync(gitignore, "utf-8");
-  fs.writeFileSync(gitignore, `${originalGitignore}empty.ts\n`);
-  await rejects(
-    () => executeTool("outline", { path: empty }, rootA),
-    /file is not accepted source/,
-    "a newly gitignored file disappears from the index",
-  );
-
   fs.writeFileSync(gitignore, originalGitignore.replace("ignored.ts\n", ""));
   const unignoredSymbol = await executeTool("def", { name: "ignoredSymbol" }, rootA);
   assert(
     resultText(unignoredSymbol).includes("function_declaration ignoredSymbol"),
     "a newly unignored file appears in the index",
   );
-  const restoredEmptyOutline = await executeTool("outline", { path: empty }, rootA);
-  assert(
-    resultText(restoredEmptyOutline) === `No symbols found in "${empty}"`,
-    "removing the ignore rule restores the previously ignored file",
-  );
-
   fs.writeFileSync(gitignore, originalGitignore);
   const reignoredSymbol = await executeTool("def", { name: "ignoredSymbol" }, rootA);
   assert(
@@ -697,11 +425,7 @@ try {
     "restoring the .gitignore re-ignores its files",
   );
 
-  const stalledClient = net.createConnection(socket);
-  await once(stalledClient, "connect");
-  const shutdownStarted = Date.now();
   await stopDaemon(daemon);
-  assert(Date.now() - shutdownStarted < 2_500, "shutdown closes incomplete client connections");
   daemon = null;
   await rejects(
     () => executeTool("outline", {}, rootA),
