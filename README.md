@@ -65,7 +65,7 @@ There is no daemon, configured source root, or startup scan. Any supported sourc
 - A file scope searches exactly that source file.
 - A directory scope searches supported source files beneath it.
 - Ancestor and nested `.gitignore` files are honored.
-- Logical routes containing `.git`, `.pnpm`, or `.pnpm-store` are excluded.
+- Logical routes containing `.git` are excluded.
 - Project scopes do not enter `node_modules` or `.venv`.
 - A scope inside `node_modules` or `.venv` indexes that dependency subtree despite `.gitignore`.
 - File and directory symlinks retain their logical paths, and separate aliases remain independently queryable.

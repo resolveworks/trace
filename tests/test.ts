@@ -200,6 +200,11 @@ const sharedSource = write(
 );
 write(projectA, ".gitignore", "ignored.ts\nnode_modules/\n.venv/\n");
 const ignored = write(projectA, "ignored.ts", "export function ignoredSymbol() {}\n");
+const gitMetadataSource = write(
+  projectA,
+  ".git/internal.ts",
+  "export function gitMetadataSymbol() {}\n",
+);
 const dependencyPhysical = write(
   projectA,
   "node_modules/.pnpm/dep@1.0.0/node_modules/dep/index.js",
@@ -230,15 +235,6 @@ const venvModule = write(
   "def environment_value():\n    return 12\n",
 );
 write(projectB, "b.ts", "export function target(): number { return 2; }\n");
-const projectBehindStoreBacklink = path.join(projectB, "project");
-const backlinkSource = write(
-  projectBehindStoreBacklink,
-  "src/backlink.ts",
-  "export function backlinkSymbol() { return 1; }\n",
-);
-const storeBacklink = path.join(projectB, ".pnpm-store", "v11", "projects", "id");
-fs.mkdirSync(path.dirname(storeBacklink), { recursive: true });
-fs.symlinkSync(projectBehindStoreBacklink, storeBacklink, "dir");
 const cycleNeighbor = write(
   projectA,
   "cycle/neighbor.ts",
@@ -296,21 +292,6 @@ try {
     "directory reconciliation includes file symlinks",
   );
 
-  const backlinkDefinition = await executeTool(
-    "def",
-    { name: "backlinkSymbol", path: projectBehindStoreBacklink },
-    projectB,
-  );
-  assert(
-    resultText(backlinkDefinition).includes(`in ${backlinkSource}:1`) &&
-      !resultText(backlinkDefinition).includes(storeBacklink),
-    "an excluded store backlink cannot suppress the accepted logical path",
-  );
-  const storeOutline = await executeTool("outline", { path: storeBacklink }, projectB);
-  assert(
-    resultText(storeOutline) === `No symbols found in "${storeBacklink}"`,
-    ".pnpm-store logical routes remain excluded",
-  );
   const cycleDefinition = await executeTool(
     "def",
     { name: "cycleNeighborSymbol", path: path.dirname(cycleNeighbor) },
@@ -559,12 +540,6 @@ try {
     "project-scoped outlines exclude dependency environment files",
   );
 
-  await rejects(
-    () => executeTool("def", { name: "dependencyValue", path: dependencyPhysical }, projectA),
-    /file is not accepted source/,
-    "physical .pnpm package files remain excluded",
-  );
-
   console.log("\nFilesystem lifecycle...");
   fs.writeFileSync(linkedSource, "export function linkedSymbol() {\n  return 2;\n}\n");
   const refreshedLinkedDefinition = await executeTool(
@@ -642,6 +617,11 @@ try {
     /file is not accepted source/,
     "a gitignored file is rejected",
   );
+  await rejects(
+    () => executeTool("outline", { path: gitMetadataSource }, projectA),
+    /file is not accepted source/,
+    ".git logical routes remain excluded",
+  );
   const externalDefinition = await executeTool(
     "def",
     { name: "externalSymbol", path: externalSource },
@@ -649,7 +629,7 @@ try {
   );
   assert(
     resultText(externalDefinition).includes(`in ${externalSource}:1`),
-    "an absolute scope is searchable without prior configuration",
+    "an arbitrary absolute file scope is searchable",
   );
 
   const emptyDirectoryOutline = await executeTool("outline", { path: emptyDirectory }, projectA);

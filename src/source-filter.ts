@@ -7,7 +7,6 @@ import { byExtension } from "./languages.ts";
 type Rules = ReturnType<typeof ignore>;
 
 const ENV_DIRS: ReadonlySet<string> = new Set(["node_modules", ".venv"]);
-const EXCLUDED_DIRS: ReadonlySet<string> = new Set([".git", ".pnpm", ".pnpm-store"]);
 
 /** Central lexical path policy for reconciliation and queries. */
 export class SourceFilter {
@@ -38,10 +37,8 @@ export class SourceFilter {
     const { root, parts } = this.pathParts(filePath);
     if (parts.length === 0) return false;
 
-    // Exclusions are based on the logical route and win inside environments.
-    // A package physically stored under .pnpm remains accepted through a
-    // logical node_modules/pkg symlink that contains no excluded segment.
-    if (parts.some((part) => EXCLUDED_DIRS.has(part))) return true;
+    // Repository metadata is excluded by logical route, including inside environments.
+    if (parts.includes(".git")) return true;
     if (parts.some((part) => ENV_DIRS.has(part))) return false;
 
     const active: { directory: string; rules: Rules }[] = [];
