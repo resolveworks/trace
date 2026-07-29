@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import type { Database as DatabaseType, Statement } from "better-sqlite3";
 import { ENV_DIRS } from "./project-filter.ts";
 
-export interface Symbol {
+interface Symbol {
   id: number;
   name: string;
   kind: string;
@@ -124,14 +124,13 @@ function prepareStatements(database: DatabaseType): Statements {
   };
 }
 
-export function openDb(file: string): DatabaseType {
+export function openDb(file: string): void {
   if (db) throw new Error("trace database is already open");
   db = new Database(file);
   db.pragma("foreign_keys = ON");
   db.pragma("journal_mode = WAL");
   createSchema(db);
   statements = prepareStatements(db);
-  return db;
 }
 
 export function closeDb(): void {
@@ -266,7 +265,7 @@ export function replaceFile(
   })();
 }
 
-export function deleteOrphanContents(): void {
+function deleteOrphanContents(): void {
   requireStatements().deleteOrphans.run();
 }
 

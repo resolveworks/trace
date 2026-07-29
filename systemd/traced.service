@@ -3,7 +3,7 @@ Description=trace source index
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env node %h/projects/trace/src/daemon.ts
+ExecStart=/usr/bin/env node %h/Projects/trace/src/daemon.ts
 UMask=0077
 
 [Install]

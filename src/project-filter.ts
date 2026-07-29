@@ -30,7 +30,7 @@ export class ProjectFilter {
     return this.relativeParts(filePath)?.some((part) => ENV_DIRS.has(part)) ?? false;
   }
 
-  isSupported(filePath: string): boolean {
+  private isSupported(filePath: string): boolean {
     return byExtension.has(path.extname(filePath).toLowerCase());
   }
 

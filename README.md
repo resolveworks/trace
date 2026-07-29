@@ -23,7 +23,7 @@ The daemon does not scan roots at startup or watch the filesystem. Before every 
 
 Project scopes do not enter `node_modules` or `.venv` and do not delete dependency rows already in the cache. A request inside one of those environments reconciles that exact logical subtree despite `.gitignore`, so dependencies are indexed entirely on demand. A query racing a filesystem rewrite or package installation may observe an intermediate state; the next query reconciles the scope again.
 
-Currently supported languages: TypeScript/TSX, Python, and Rust.
+Currently supported languages: JavaScript, TypeScript/TSX, Python, and Rust.
 
 ## Configuration
 
