@@ -1,8 +1,8 @@
 (class_definition
-  name: (identifier) @name) @definition.class
+  name: (identifier) @name) @definition
 
 (function_definition
-  name: (identifier) @name) @definition.function
+  name: (identifier) @name) @definition
 
 (call
   function: (identifier) @name) @reference.call

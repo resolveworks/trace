@@ -18,29 +18,6 @@ import {
   initializeTrace,
 } from "../src/trace.ts";
 
-const FUNCTION_LIKE_KINDS = new Set([
-  "abstract_method_signature",
-  "assignment_expression",
-  "function_declaration",
-  "function_definition",
-  "function_expression",
-  "function_item",
-  "function_signature",
-  "generator_function",
-  "generator_function_declaration",
-  "method_definition",
-  "method_signature",
-  "pair",
-  "variable_declarator",
-]);
-
-function shortKind(kind: string): string {
-  return kind
-    .replace(/_declaration$/, "")
-    .replace(/_definition$/, "")
-    .replace(/_signature$/, "");
-}
-
 function buildSymbolTree(symbols: OutlineSymbol[]): Map<number | null, OutlineSymbol[]> {
   const tree = new Map<number | null, OutlineSymbol[]>();
   for (const symbol of symbols) {
@@ -62,11 +39,9 @@ function renderTreeLines(
   const lines: string[] = [];
   for (const symbol of tree.get(parentId) ?? []) {
     lines.push(
-      `${indent}${symbol.name} (${shortKind(symbol.kind)}) — ${symbol.start_line}-${symbol.end_line}`,
+      `${indent}${symbol.name} (${symbol.node_type}) — ${symbol.start_line}-${symbol.end_line}`,
     );
-    if (!FUNCTION_LIKE_KINDS.has(symbol.kind)) {
-      lines.push(...renderTreeLines(tree, symbol.id, indent + "  "));
-    }
+    lines.push(...renderTreeLines(tree, symbol.id, indent + "  "));
   }
   return lines;
 }
@@ -136,7 +111,7 @@ export function registerTrace(pi: ExtensionAPI, database: string) {
           ? `${definition.parent_name}.${definition.name}`
           : definition.name;
         const prefix = definitions.length === 1 ? "" : `${index + 1}. `;
-        const label = `${prefix}${definition.kind} ${qualifiedName} in ${definition.file}:${definition.start_line}-${definition.end_line}`;
+        const label = `${prefix}${definition.node_type} ${qualifiedName} in ${definition.file}:${definition.start_line}-${definition.end_line}`;
         const lines = fs.readFileSync(definition.file, "utf-8").split("\n");
         const body = lines
           .slice(definition.start_line - 1, definition.end_line)
@@ -191,7 +166,7 @@ export function registerTrace(pi: ExtensionAPI, database: string) {
           fileCache.set(call.file, lines);
         }
         const scope = call.caller_name
-          ? `${call.caller_name} (${call.caller_kind})`
+          ? `${call.caller_name} (${call.caller_node_type})`
           : "(top-level)";
         const label = `${call.file}:${call.line} — called in ${scope}`;
         const source = lines

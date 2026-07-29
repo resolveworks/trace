@@ -1,30 +1,30 @@
 ; Type and namespace definitions.
 
 (struct_item
-  name: (type_identifier) @name) @definition.class
+  name: (type_identifier) @name) @definition
 
 (enum_item
-  name: (type_identifier) @name) @definition.class
+  name: (type_identifier) @name) @definition
 
 (union_item
-  name: (type_identifier) @name) @definition.class
+  name: (type_identifier) @name) @definition
 
 (type_item
-  name: (type_identifier) @name) @definition.type
+  name: (type_identifier) @name) @definition
 
 (trait_item
-  name: (type_identifier) @name) @definition.interface
+  name: (type_identifier) @name) @definition
 
 (mod_item
-  name: (identifier) @name) @definition.module
+  name: (identifier) @name) @definition
 
 (macro_definition
-  name: (identifier) @name) @definition.macro
+  name: (identifier) @name) @definition
 
 ; Free functions and methods with bodies both use function_item syntax.
 
 (function_item
-  name: (identifier) @name) @definition.function
+  name: (identifier) @name) @definition
 
 ; Direct, method, associated, and generic calls.
 

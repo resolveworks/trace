@@ -1,14 +1,14 @@
 ; Definitions shared by JavaScript, TypeScript, and TSX.
 
 (method_definition
-  name: (property_identifier) @name) @definition.method
+  name: (property_identifier) @name) @definition
 
 [
   (class
     name: (_) @name)
   (class_declaration
     name: (_) @name)
-] @definition.class
+] @definition
 
 [
   (function_expression
@@ -19,17 +19,17 @@
     name: (identifier) @name)
   (generator_function_declaration
     name: (identifier) @name)
-] @definition.function
+] @definition
 
 (lexical_declaration
   (variable_declarator
     name: (identifier) @name
-    value: [(arrow_function) (function_expression)]) @definition.function)
+    value: [(arrow_function) (function_expression)]) @definition)
 
 (variable_declaration
   (variable_declarator
     name: (identifier) @name
-    value: [(arrow_function) (function_expression)]) @definition.function)
+    value: [(arrow_function) (function_expression)]) @definition)
 
 (assignment_expression
   left: [
@@ -37,11 +37,11 @@
     (member_expression
       property: (property_identifier) @name)
   ]
-  right: [(arrow_function) (function_expression)]) @definition.function
+  right: [(arrow_function) (function_expression)]) @definition
 
 (pair
   key: (property_identifier) @name
-  value: [(arrow_function) (function_expression)]) @definition.function
+  value: [(arrow_function) (function_expression)]) @definition
 
 ; Calls are indexed under the identifier or final member name used at the site.
 

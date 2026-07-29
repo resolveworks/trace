@@ -1,26 +1,18 @@
-import * as fs from "node:fs";
 import Database from "better-sqlite3";
 import type { Database as DatabaseType, Statement } from "better-sqlite3";
 
-interface Symbol {
-  id: number;
+export interface Definition {
   name: string;
-  kind: string;
+  node_type: string;
   file: string;
   start_line: number;
   end_line: number;
-  parent_id: number | null;
-}
-
-export interface Definition extends Symbol {
   parent_name: string | null;
-  parent_kind: string | null;
 }
 
 export interface CallSite {
   caller_name: string | null;
-  caller_kind: string | null;
-  callee_name: string;
+  caller_node_type: string | null;
   file: string;
   line: number;
   end_line: number;
@@ -29,7 +21,7 @@ export interface CallSite {
 export interface OutlineSymbol {
   id: number;
   name: string;
-  kind: string;
+  node_type: string;
   start_line: number;
   end_line: number;
   parent_id: number | null;
@@ -52,10 +44,6 @@ export interface FileStat {
 export function sameStat(a: FileStat, b: FileStat): boolean {
   return a.size === b.size && a.mtimeNs === b.mtimeNs;
 }
-
-// Bump whenever schema or extraction semantics change. A mismatch discards the
-// whole derived cache; trace never migrates cached index data.
-const CACHE_VERSION = 1;
 
 let db: DatabaseType | null = null;
 let statements: Statements | null = null;
@@ -113,7 +101,7 @@ function prepareStatements(database: DatabaseType): Statements {
     ),
     deleteFile: database.prepare("DELETE FROM files WHERE path = ?"),
     insertSymbol: database.prepare(
-      "INSERT INTO symbols (content_id, name, kind, start_line, end_line, parent_id) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO symbols (content_id, name, node_type, start_line, end_line, parent_id) VALUES (?, ?, ?, ?, ?, ?)",
     ),
     updateParent: database.prepare("UPDATE symbols SET parent_id = ? WHERE id = ?"),
     insertCall: database.prepare(
@@ -124,21 +112,10 @@ function prepareStatements(database: DatabaseType): Statements {
 
 export function openDb(file: string): void {
   if (db) throw new Error("trace database is already open");
-  const existed = fs.existsSync(file);
-  let database = new Database(file);
-  const version = Number(database.pragma("user_version", { simple: true }));
-  const cacheIsCurrent = version === CACHE_VERSION;
-  if (existed && !cacheIsCurrent) {
-    database.close();
-    for (const suffix of ["", "-shm", "-wal"]) fs.rmSync(`${file}${suffix}`, { force: true });
-    database = new Database(file);
-  }
-
-  db = database;
+  db = new Database(file);
   db.pragma("foreign_keys = ON");
   db.pragma("journal_mode = WAL");
   createSchema(db);
-  if (!cacheIsCurrent) db.pragma(`user_version = ${CACHE_VERSION}`);
   statements = prepareStatements(db);
 }
 
@@ -169,7 +146,7 @@ function createSchema(database: DatabaseType): void {
       id INTEGER PRIMARY KEY,
       content_id INTEGER NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
-      kind TEXT NOT NULL,
+      node_type TEXT NOT NULL,
       start_line INTEGER NOT NULL,
       end_line INTEGER NOT NULL,
       parent_id INTEGER REFERENCES symbols(id) ON DELETE CASCADE
@@ -257,7 +234,7 @@ export function deleteFiles(files: string[]): void {
 export function insertSymbol(
   contentId: number,
   name: string,
-  kind: string,
+  nodeType: string,
   startLine: number,
   endLine: number,
   parentId: number | null = null,
@@ -265,7 +242,7 @@ export function insertSymbol(
   const result = requireStatements().insertSymbol.run(
     contentId,
     name,
-    kind,
+    nodeType,
     startLine,
     endLine,
     parentId,
@@ -318,8 +295,8 @@ export function findDefinition(
 ): Definition[] {
   const rows = requireDb()
     .prepare(
-      `SELECT s.id, s.name, s.kind, f.path AS file, s.start_line, s.end_line, s.parent_id,
-              p.name AS parent_name, p.kind AS parent_kind
+      `SELECT s.name, s.node_type, f.path AS file, s.start_line, s.end_line,
+              p.name AS parent_name
        FROM symbols s
        JOIN files f ON f.content_id = s.content_id
        LEFT JOIN symbols p ON s.parent_id = p.id
@@ -328,22 +305,19 @@ export function findDefinition(
     )
     .all(name, ...scopeParameters(scope)) as Record<string, unknown>[];
   return rows.map((row) => ({
-    id: row.id as number,
     name: row.name as string,
-    kind: row.kind as string,
+    node_type: row.node_type as string,
     file: row.file as string,
     start_line: row.start_line as number,
     end_line: row.end_line as number,
-    parent_id: (row.parent_id as number | null) ?? null,
     parent_name: (row.parent_name as string | null) ?? null,
-    parent_kind: (row.parent_kind as string | null) ?? null,
   }));
 }
 
 export function findCallers(name: string, scope: string, includeEnvironments: boolean): CallSite[] {
   const rows = requireDb()
     .prepare(
-      `SELECT s.name AS caller_name, s.kind AS caller_kind, c.callee_name,
+      `SELECT s.name AS caller_name, s.node_type AS caller_node_type,
               f.path AS file, c.line, c.end_line
        FROM calls c
        JOIN files f ON f.content_id = c.content_id
@@ -354,8 +328,7 @@ export function findCallers(name: string, scope: string, includeEnvironments: bo
     .all(name, ...scopeParameters(scope)) as Record<string, unknown>[];
   return rows.map((row) => ({
     caller_name: (row.caller_name as string | null) ?? null,
-    caller_kind: (row.caller_kind as string | null) ?? null,
-    callee_name: row.callee_name as string,
+    caller_node_type: (row.caller_node_type as string | null) ?? null,
     file: row.file as string,
     line: row.line as number,
     end_line: row.end_line as number,
@@ -366,7 +339,7 @@ export function getOutline(scope: string, includeEnvironments: boolean): DirSymb
   const rows = requireDb()
     .prepare(
       `WITH f AS (${scopedFilesQuery(includeEnvironments)})
-       SELECT f.path AS file, s.id, s.name, s.kind, s.start_line, s.end_line, s.parent_id
+       SELECT f.path AS file, s.id, s.name, s.node_type, s.start_line, s.end_line, s.parent_id
        FROM f
        JOIN symbols s ON s.content_id = f.content_id
        ORDER BY f.path, s.start_line`,
@@ -376,7 +349,7 @@ export function getOutline(scope: string, includeEnvironments: boolean): DirSymb
     file: row.file as string,
     id: row.id as number,
     name: row.name as string,
-    kind: row.kind as string,
+    node_type: row.node_type as string,
     start_line: row.start_line as number,
     end_line: row.end_line as number,
     parent_id: (row.parent_id as number | null) ?? null,

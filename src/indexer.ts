@@ -126,16 +126,12 @@ function indexSourceFile(filter: SourceFilter, file: string, stat: FileStat): vo
 
 interface ExtractedDef {
   dbId: number;
-  name: string;
-  kind: string;
-  startLine: number;
-  endLine: number;
   startIndex: number;
   endIndex: number;
 }
 
 function extractFromTree(root: SyntaxNode, contentId: number, lang: LoadedLang): void {
-  const defMap = new Map<string, ExtractedDef>();
+  const definitions: ExtractedDef[] = [];
   const refBuffer: { refNode: SyntaxNode; nameNode: SyntaxNode }[] = [];
 
   for (const match of lang.query.matches(root)) {
@@ -144,7 +140,7 @@ function extractFromTree(root: SyntaxNode, contentId: number, lang: LoadedLang):
     let nameNode: SyntaxNode | null = null;
 
     for (const capture of match.captures) {
-      if (capture.name.startsWith("definition.")) {
+      if (capture.name === "definition") {
         defNode = capture.node;
       } else if (capture.name === "reference.call") {
         refNode = capture.node;
@@ -154,36 +150,25 @@ function extractFromTree(root: SyntaxNode, contentId: number, lang: LoadedLang):
     }
 
     if (defNode && nameNode) {
-      const name = nameNode.text;
-      const startLine = defNode.startPosition.row + 1;
-      const key = `${name}|${defNode.startIndex}`;
-      if (!defMap.has(key)) {
-        const kind = defNode.type;
-        const endLine = defNode.endPosition.row + 1;
-        const dbId = insertSymbol(contentId, name, kind, startLine, endLine);
-        defMap.set(key, {
-          dbId,
-          name,
-          kind,
-          startLine,
-          endLine,
-          startIndex: defNode.startIndex,
-          endIndex: defNode.endIndex,
-        });
-      }
+      const dbId = insertSymbol(
+        contentId,
+        nameNode.text,
+        defNode.type,
+        defNode.startPosition.row + 1,
+        defNode.endPosition.row + 1,
+      );
+      definitions.push({
+        dbId,
+        startIndex: defNode.startIndex,
+        endIndex: defNode.endIndex,
+      });
     } else if (refNode && nameNode) {
       refBuffer.push({ refNode, nameNode });
     }
   }
 
-  const definitions = [...defMap.values()];
   for (const definition of definitions) {
-    const parent = findEnclosingDef(
-      definition.startIndex,
-      definition.endIndex,
-      definitions,
-      definition.dbId,
-    );
+    const parent = findEnclosingDef(definition.startIndex, definition.endIndex, definitions);
     if (parent) updateSymbolParent(definition.dbId, parent.dbId);
   }
 
@@ -198,12 +183,10 @@ function findEnclosingDef(
   startIndex: number,
   endIndex: number,
   definitions: ExtractedDef[],
-  excludeId?: number,
 ): ExtractedDef | null {
   let best: ExtractedDef | null = null;
   let bestSize = Infinity;
   for (const definition of definitions) {
-    if (definition.dbId === excludeId) continue;
     const strictlyContains =
       startIndex >= definition.startIndex &&
       endIndex <= definition.endIndex &&

@@ -106,6 +106,17 @@ const source = write(
   ].join("\n"),
 );
 const empty = write(projectA, "empty.ts", "// indexed, with no symbols\n");
+const javascriptContract = write(
+  projectA,
+  "contract/client.js",
+  [
+    "class Client {",
+    "  run() { return api.fetch(); }",
+    "}",
+    "const build = () => new Client();",
+    "",
+  ].join("\n"),
+);
 const typescriptContract = write(
   projectA,
   "contract/types.ts",
@@ -309,33 +320,54 @@ try {
     resultText(outline) ===
       [
         `${source}:`,
-        "  target (function) — 1-3",
-        "  Counter (class) — 5-9",
-        "    increment (method) — 6-8",
+        "  target (function_declaration) — 1-3",
+        "  Counter (class_declaration) — 5-9",
+        "    increment (method_definition) — 6-8",
       ].join("\n"),
     "outline accepts an absolute directory and renders nested symbols",
   );
 
   console.log("\nExtraction contract...");
+  const javascriptOutline = resultText(
+    await executeTool("outline", { path: javascriptContract }, projectA),
+  );
+  const javascriptMemberCallers = resultText(
+    await executeTool("callers", { name: "fetch", path: javascriptContract }, projectA),
+  );
+  const javascriptConstructorCallers = resultText(
+    await executeTool("callers", { name: "Client", path: javascriptContract }, projectA),
+  );
+  assert(
+    javascriptOutline ===
+      [
+        "Client (class_declaration) — 1-3",
+        "  run (method_definition) — 2-2",
+        "build (variable_declarator) — 4-4",
+      ].join("\n") &&
+      javascriptMemberCallers.includes("called in run (method_definition)") &&
+      javascriptConstructorCallers.includes("called in build (variable_declarator)"),
+    "JavaScript definitions, methods, member calls, and constructors are extracted",
+  );
+
   const typescriptOutline = resultText(
     await executeTool("outline", { path: typescriptContract }, projectA),
   );
   assert(
     typescriptOutline ===
       [
-        "Service (interface) — 1-3",
-        "  run (method) — 2-2",
-        "Compact (interface) — 4-4",
-        "  ping (method) — 4-4",
-        "  ping (method) — 4-4",
-        "Input (type_alias) — 5-5",
-        "Output (type_alias) — 6-6",
-        "create (function) — 7-7",
+        "Service (interface_declaration) — 1-3",
+        "  run (method_signature) — 2-2",
+        "Compact (interface_declaration) — 4-4",
+        "  ping (method_signature) — 4-4",
+        "  ping (method_signature) — 4-4",
+        "Input (type_alias_declaration) — 5-5",
+        "Output (type_alias_declaration) — 6-6",
+        "create (function_signature) — 7-7",
         "API (internal_module) — 8-10",
-        "  declared (function) — 9-9",
-        "Widget (class) — 11-11",
-        "build (function) — 12-16",
-        "sameLine (function) — 17-17",
+        "  declared (function_signature) — 9-9",
+        "Widget (class_declaration) — 11-11",
+        "build (function_declaration) — 12-16",
+        "sameLine (function_declaration) — 17-17",
       ].join("\n"),
     "TypeScript interfaces, signatures, types, modules, classes, and functions are outlined",
   );
@@ -396,7 +428,11 @@ try {
   );
   assert(
     pythonOutline ===
-      ["Worker (class) — 1-4", "  work (function) — 2-4", "helper (function) — 6-7"].join("\n") &&
+      [
+        "Worker (class_definition) — 1-4",
+        "  work (function_definition) — 2-4",
+        "helper (function_definition) — 6-7",
+      ].join("\n") &&
       pythonHelperCallers.includes("called in work (function_definition)") &&
       pythonMemberCallers.includes("self.finish()"),
     "Python classes, functions, and direct and member calls are extracted",
@@ -426,7 +462,7 @@ try {
         "EngineAlias (type_item) — 4-4",
         "Runner (trait_item) — 5-5",
         "support (mod_item) — 6-6",
-        "local_macro (macro) — 7-7",
+        "local_macro (macro_definition) — 7-7",
         "execute (function_item) — 10-14",
         "helper (function_item) — 17-17",
       ].join("\n") &&

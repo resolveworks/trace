@@ -14,7 +14,7 @@ The Pi extension opens a persistent SQLite cache at `~/.pi/agent/extensions/trac
 
 Every operation invalidates cached ignore rules, reconciles exactly the requested file or directory, and then queries SQLite. Each result is therefore fresh for its requested scope; cached rows elsewhere may be stale until that scope is queried. Unchanged files are skipped by stat and identical content at different paths shares one parsed content row.
 
-An invalid scope, traversal failure, indexing failure, or database failure is an error. The database is a disposable, versioned cache; a schema or extraction-contract version mismatch replaces it and lets queries repopulate it.
+An invalid scope, traversal failure, indexing failure, or database failure is an error. The database has no migrations, compatibility handling, or automatic deletion. After a schema or extraction-contract change, stop Pi sessions using trace and manually remove `index.sqlite`, `index.sqlite-shm`, and `index.sqlite-wal`; subsequent queries repopulate the cache.
 
 Project scopes reconcile first-party source while preserving cached dependency rows. A request inside `node_modules` or `.venv` reconciles that exact logical subtree despite `.gitignore`, so dependencies are indexed entirely on demand. A query racing a filesystem rewrite or package installation may observe an intermediate state; the next query reconciles the scope again.
 
@@ -24,7 +24,7 @@ Currently supported languages: JavaScript, TypeScript/TSX, Python, and Rust.
 
 Requires Node.js 22.18 or newer (native TypeScript type stripping) and pnpm 11.3.0 (pinned in `package.json`).
 
-Grammar WASM files are supplied by the pinned `tree-sitter-*` npm packages; no local grammar checkout is required. Trace owns the extraction queries in `queries/`. JavaScript definitions and calls form the base for the composable TypeScript and JSX additions.
+Grammar WASM files are supplied by the pinned `tree-sitter-*` npm packages; no local grammar checkout is required. Trace owns the extraction queries in `queries/`. JavaScript definitions and calls form the base for the composable TypeScript and JSX additions. Reported `node_type` values are the grammar's tree-sitter `Node.type` values.
 
 ```sh
 pnpm install --frozen-lockfile

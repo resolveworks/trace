@@ -28,7 +28,8 @@ trace/
 ## Design
 
 - Every query has an existing file or directory scope; omitted paths use Pi's current working directory.
-- The extension uses one persistent SQLite cache. Every query invalidates cached ignore rules, reconciles exactly the requested file or directory, validates the scope, and then queries SQLite. A cache-version mismatch replaces the disposable database and lets queries repopulate it.
+- The extension uses one persistent SQLite cache. Every query invalidates cached ignore rules, reconciles exactly the requested file or directory, validates the scope, and then queries SQLite.
+- The cache has no schema or extraction version, migrations, compatibility handling, or automatic deletion. When the schema or extraction contract changes, stop sessions using trace and manually delete `~/.pi/agent/extensions/trace/index.sqlite`, `index.sqlite-shm`, and `index.sqlite-wal` before running the changed code. Do not add startup recovery or deletion logic.
 - `node_modules` and `.venv` are dependency environments: indexed only when explicitly scoped despite `.gitignore`, stored at their logical (symlink-unresolved) paths, and excluded from queries whose scope is outside them. Non-environment reconciliation neither enters environments nor deletes their cached rows. A query racing package installation may see an intermediate state; the next scoped query reconciles again.
 - Lexical filtering starts at the filesystem-volume root so ancestor and nested `.gitignore` rules are deterministic for every scope. Logical routes containing `.git`, `.pnpm`, or `.pnpm-store` are never indexed. Packages physically stored under `.pnpm` remain available through accepted project-visible paths such as `node_modules/pkg`; exclusion decisions never use the resolved physical target.
 - Directory symlinks are traversed through each accepted logical path. `(device, inode)` identity prevents cycles only while a target is on the current ancestor chain; it never globally selects a winning alias. Independent non-cyclic aliases are independently cached and queryable. File symlinks are not indexed.
@@ -36,7 +37,7 @@ trace/
 - The extension initializes the parser and opens the database on session start, then closes both on session shutdown.
 - Traversal, indexing, and database failures fail the tool call; narrow `ENOENT`/`ENOTDIR` races during reconciliation are treated as absence.
 - Invalid query scopes are errors. Empty directory scopes and supported source files without symbols are valid and return empty results.
-- **tree-sitter** provides syntax, not semantics: callers do not resolve aliases, reassignments, or types.
+- **tree-sitter** provides syntax, not semantics: callers do not resolve aliases, reassignments, or types. Owned queries use `@definition`, `@reference.call`, and `@name`; each definition or call site must be emitted exactly once because extraction does not deduplicate matches. Symbol `node_type` values are the grammar's tree-sitter `Node.type` values.
 - Use `rg` and `read` for text content, strings, and comments.
 
 ## Testing
