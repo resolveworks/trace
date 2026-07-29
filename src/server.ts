@@ -15,7 +15,13 @@ import {
   openDb,
   syncRoots,
 } from "./db.ts";
-import { closeIndexer, indexRoot, initializeIndexer, reindexFile } from "./indexer.ts";
+import {
+  closeIndexer,
+  indexRoot,
+  initializeIndexer,
+  reconcileFile,
+  reindexFile,
+} from "./indexer.ts";
 import { closeLanguages } from "./languages.ts";
 import { ProjectFilter } from "./project-filter.ts";
 import { DirectoryWatcher } from "./watcher.ts";
@@ -36,9 +42,8 @@ interface IndexedRoot {
 class RequestError extends Error {}
 
 /**
- * Structural events (directory topology and .gitignore changes) are
- * debounced per root so event storms like a package install collapse into
- * one watch rebuild plus index reconciliation.
+ * First-party directory topology and .gitignore events are debounced per
+ * root so event storms collapse into one watch rebuild plus reconciliation.
  */
 const STRUCTURAL_DELAY_MS = 250;
 
@@ -136,14 +141,14 @@ export class TraceServer {
   }
 
   /**
-   * Full-root reconciliation: rebuild the directory watches and rescan the
-   * index. The replacement watches are established during the walk, before
-   * their children are scanned, so no final state is missed.
+   * First-party root reconciliation: rebuild directory watches and rescan live
+   * source without sweeping dependency snapshots. Replacement watches are
+   * established before their children are scanned, so no final state is missed.
    */
   private rebuildRoot(root: IndexedRoot, reason: string): void {
     if (this.closed) return;
     root.watcher.refresh();
-    const result = indexRoot(root.id, root.filter);
+    const result = indexRoot(root.id, root.filter, root.path, "watch");
     this.log(
       `trace: ${root.path}: reconciled after ${reason}: ` +
         `${result.files} files, ${result.changed} changed, ${result.removed} removed, ` +
@@ -188,18 +193,23 @@ export class TraceServer {
   }
 
   private execute(request: TraceRequest): TraceResult {
-    const scope = this.resolveScope(request.scope);
+    const { scope, includeEnvironments } = this.resolveScope(request.scope);
     switch (request.op) {
       case "def":
-        return { definitions: findDefinition(request.name, scope) };
+        return {
+          definitions: findDefinition(request.name, scope, includeEnvironments),
+        };
       case "callers":
-        return { callers: findCallers(request.name, scope) };
+        return { callers: findCallers(request.name, scope, includeEnvironments) };
       case "outline":
-        return { symbols: getOutline(scope) };
+        return { symbols: getOutline(scope, includeEnvironments) };
     }
   }
 
-  private resolveScope(requested: string): string {
+  private resolveScope(requested: string): {
+    scope: string;
+    includeEnvironments: boolean;
+  } {
     const scope = path.resolve(requested);
     let stat: ReturnType<typeof fs.statSync>;
     try {
@@ -208,6 +218,12 @@ export class TraceServer {
       if (!isPathMissing(error)) throw error;
       throw new RequestError(`scope does not exist: ${requested}`);
     }
+    const isFile = stat.isFile();
+    const isDirectory = stat.isDirectory();
+    if (!isFile && !isDirectory) {
+      throw new RequestError(`scope is not a file or directory: ${scope}`);
+    }
+
     const root = this.roots.find((candidate) => contains(candidate.path, scope));
     if (!root) {
       throw new RequestError(
@@ -215,15 +231,16 @@ export class TraceServer {
       );
     }
 
-    if (stat.isFile()) {
+    const includeEnvironments = root.filter.isEnvironmentPath(scope);
+    if (isFile) {
+      if (includeEnvironments) reconcileFile(root.id, root.filter, scope);
       if (!isIndexedFile(scope)) throw new RequestError(`file is not indexed: ${scope}`);
-    } else if (stat.isDirectory()) {
-      if (scope !== root.path && !hasIndexedFileUnder(scope)) {
+    } else {
+      if (includeEnvironments) indexRoot(root.id, root.filter, scope);
+      if (scope !== root.path && !hasIndexedFileUnder(scope, includeEnvironments)) {
         throw new RequestError(`directory is not indexed: ${scope}`);
       }
-    } else {
-      throw new RequestError(`scope is not a file or directory: ${scope}`);
     }
-    return scope;
+    return { scope, includeEnvironments };
   }
 }

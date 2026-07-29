@@ -17,7 +17,7 @@ interface WatchedDirectory extends DirectoryTarget {
   watcher: fs.FSWatcher;
 }
 
-/** One non-recursive fs.watch per included logical directory. */
+/** One non-recursive fs.watch per included first-party logical directory. */
 export class DirectoryWatcher {
   private readonly filter: ProjectFilter;
   private readonly callbacks: DirectoryWatcherCallbacks;
@@ -41,21 +41,25 @@ export class DirectoryWatcher {
     const next = new Map<string, WatchedDirectory>();
     const created: fs.FSWatcher[] = [];
     try {
-      walkDirectories(this.filter, this.filter.root, (directory, target) => {
-        const existing = this.watchers.get(directory);
-        if (
-          !this.invalidated.has(directory) &&
-          existing?.realpath === target.realpath &&
-          existing.device === target.device &&
-          existing.inode === target.inode
-        ) {
-          next.set(directory, existing);
-          return;
-        }
-        const watcher = this.watchDirectory(directory);
-        created.push(watcher);
-        next.set(directory, { ...target, watcher });
-      });
+      walkDirectories(
+        this.filter,
+        this.filter.root,
+        (directory, target) => {
+          const existing = this.watchers.get(directory);
+          if (
+            !this.invalidated.has(directory) &&
+            existing?.device === target.device &&
+            existing.inode === target.inode
+          ) {
+            next.set(directory, existing);
+            return;
+          }
+          const watcher = this.watchDirectory(directory);
+          created.push(watcher);
+          next.set(directory, { ...target, watcher });
+        },
+        "watch",
+      );
     } catch (error) {
       for (const watcher of created) watcher.close();
       throw error;

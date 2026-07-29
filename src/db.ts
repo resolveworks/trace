@@ -1,6 +1,5 @@
 import Database from "better-sqlite3";
 import type { Database as DatabaseType, Statement } from "better-sqlite3";
-import * as path from "node:path";
 import { ENV_DIRS } from "./project-filter.ts";
 
 export interface Symbol {
@@ -70,6 +69,7 @@ function requireStatements(): Statements {
 /** Hot-path statements, prepared once when the database opens. */
 interface Statements {
   indexedFiles: Statement;
+  indexedFile: Statement;
   fileContent: Statement;
   contentByHash: Statement;
   insertContent: Statement;
@@ -85,6 +85,7 @@ interface Statements {
 function prepareStatements(database: DatabaseType): Statements {
   return {
     indexedFiles: database.prepare("SELECT path, size, mtime_ns FROM files WHERE root_id = ?"),
+    indexedFile: database.prepare("SELECT size, mtime_ns FROM files WHERE path = ?"),
     fileContent: database.prepare("SELECT content_id FROM files WHERE path = ?"),
     contentByHash: database.prepare("SELECT id FROM contents WHERE hash = ? AND language = ?"),
     insertContent: database.prepare("INSERT INTO contents(hash, language) VALUES (?, ?)"),
@@ -213,6 +214,13 @@ export function getIndexedFiles(rootId: number): Map<string, FileStat> {
   return new Map(rows.map((row) => [row.path, { size: row.size, mtimeNs: row.mtime_ns }]));
 }
 
+export function getIndexedFile(file: string): FileStat | null {
+  const row = requireStatements().indexedFile.safeIntegers(true).get(file) as
+    | { size: bigint; mtime_ns: bigint }
+    | undefined;
+  return row ? { size: row.size, mtimeNs: row.mtime_ns } : null;
+}
+
 export function replaceFile(
   rootId: number,
   file: string,
@@ -256,13 +264,14 @@ export function isIndexedFile(file: string): boolean {
   return requireStatements().isIndexed.get(file) !== undefined;
 }
 
-export function hasIndexedFileUnder(directory: string): boolean {
+export function hasIndexedFileUnder(directory: string, includeEnvironments = false): boolean {
   return (
     requireDb()
       .prepare(
-        `SELECT 1 FROM files f WHERE f.path GLOB ? || '/*'${environmentFilter(directory)} LIMIT 1`,
+        `SELECT 1 FROM files f JOIN roots r ON r.id = f.root_id
+         WHERE ${IS_DESCENDANT}${environmentFilter(includeEnvironments)} LIMIT 1`,
       )
-      .get(directory) !== undefined
+      .get(directory, directory) !== undefined
   );
 }
 
@@ -299,31 +308,37 @@ export function insertCall(
   requireStatements().insertCall.run(contentId, callerId, calleeName, line, endLine);
 }
 
-const IN_SCOPE = "(f.path = ? OR f.path GLOB ? || '/*')";
+const IS_DESCENDANT = "substr(f.path, 1, length(rtrim(?, '/') || '/')) = rtrim(?, '/') || '/'";
+const IN_SCOPE = `(f.path = ? OR ${IS_DESCENDANT})`;
+const RELATIVE_FILE = "substr(f.path, length(r.path) + 2)";
 const EXCLUDE_ENVIRONMENTS = [...ENV_DIRS]
-  .map((name) => `f.path NOT GLOB '*/${name}/*'`)
+  .flatMap((name) => [
+    `${RELATIVE_FILE} NOT GLOB '${name}/*'`,
+    `${RELATIVE_FILE} NOT GLOB '*/${name}/*'`,
+  ])
   .join(" AND ");
 
-function scopeIncludesEnvironment(scope: string): boolean {
-  return scope.split(path.sep).some((segment) => ENV_DIRS.has(segment));
+function environmentFilter(includeEnvironments: boolean): string {
+  return includeEnvironments ? "" : ` AND ${EXCLUDE_ENVIRONMENTS}`;
 }
 
-function environmentFilter(scope: string): string {
-  return scopeIncludesEnvironment(scope) ? "" : ` AND ${EXCLUDE_ENVIRONMENTS}`;
-}
-
-export function findDefinition(name: string, scope: string): Definition[] {
+export function findDefinition(
+  name: string,
+  scope: string,
+  includeEnvironments = false,
+): Definition[] {
   const rows = requireDb()
     .prepare(
       `SELECT s.id, s.name, s.kind, f.path AS file, s.start_line, s.end_line, s.parent_id,
               p.name AS parent_name, p.kind AS parent_kind
        FROM symbols s
        JOIN files f ON f.content_id = s.content_id
+       JOIN roots r ON r.id = f.root_id
        LEFT JOIN symbols p ON s.parent_id = p.id
-       WHERE s.name = ? AND ${IN_SCOPE}${environmentFilter(scope)}
+       WHERE s.name = ? AND ${IN_SCOPE}${environmentFilter(includeEnvironments)}
        ORDER BY length(f.path), f.path, s.start_line`,
     )
-    .all(name, scope, scope) as Record<string, unknown>[];
+    .all(name, scope, scope, scope) as Record<string, unknown>[];
   return rows.map((row) => ({
     id: row.id as number,
     name: row.name as string,
@@ -337,18 +352,19 @@ export function findDefinition(name: string, scope: string): Definition[] {
   }));
 }
 
-export function findCallers(name: string, scope: string): CallSite[] {
+export function findCallers(name: string, scope: string, includeEnvironments = false): CallSite[] {
   const rows = requireDb()
     .prepare(
       `SELECT s.name AS caller_name, s.kind AS caller_kind, c.callee_name,
               f.path AS file, c.line, c.end_line
        FROM calls c
        JOIN files f ON f.content_id = c.content_id
+       JOIN roots r ON r.id = f.root_id
        LEFT JOIN symbols s ON c.caller_id = s.id
-       WHERE c.callee_name = ? AND ${IN_SCOPE}${environmentFilter(scope)}
+       WHERE c.callee_name = ? AND ${IN_SCOPE}${environmentFilter(includeEnvironments)}
        ORDER BY length(f.path), f.path, c.line`,
     )
-    .all(name, scope, scope) as Record<string, unknown>[];
+    .all(name, scope, scope, scope) as Record<string, unknown>[];
   return rows.map((row) => ({
     caller_name: (row.caller_name as string | null) ?? null,
     caller_kind: (row.caller_kind as string | null) ?? null,
@@ -359,16 +375,17 @@ export function findCallers(name: string, scope: string): CallSite[] {
   }));
 }
 
-export function getOutline(scope: string): DirSymbol[] {
+export function getOutline(scope: string, includeEnvironments = false): DirSymbol[] {
   const rows = requireDb()
     .prepare(
       `SELECT f.path AS file, s.id, s.name, s.kind, s.start_line, s.end_line, s.parent_id
        FROM symbols s
        JOIN files f ON f.content_id = s.content_id
-       WHERE ${IN_SCOPE}${environmentFilter(scope)}
+       JOIN roots r ON r.id = f.root_id
+       WHERE ${IN_SCOPE}${environmentFilter(includeEnvironments)}
        ORDER BY f.path, s.start_line`,
     )
-    .all(scope, scope) as Record<string, unknown>[];
+    .all(scope, scope, scope) as Record<string, unknown>[];
   return rows.map((row) => ({
     file: row.file as string,
     id: row.id as number,

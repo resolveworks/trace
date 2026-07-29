@@ -7,8 +7,9 @@ import { byExtension } from "./languages.ts";
 type Rules = ReturnType<typeof ignore>;
 
 export const ENV_DIRS: ReadonlySet<string> = new Set(["node_modules", ".venv"]);
+const EXCLUDED_DIRS: ReadonlySet<string> = new Set([".git", ".pnpm", ".pnpm-store"]);
 
-/** Shared source and .gitignore filter for the initial walk and the watcher. */
+/** Central lexical path policy for indexing, queries, and watcher traversal. */
 export class ProjectFilter {
   readonly root: string;
   private readonly cache = new Map<string, Rules | null>();
@@ -25,6 +26,15 @@ export class ProjectFilter {
     return !this.isIgnored(dirPath, true);
   }
 
+  /** Dependency environments are indexed but never recursively watched. */
+  mayWatchDirectory(dirPath: string): boolean {
+    return this.includesDirectory(dirPath) && !this.isEnvironmentPath(dirPath);
+  }
+
+  isEnvironmentPath(filePath: string): boolean {
+    return this.relativeParts(filePath)?.some((part) => ENV_DIRS.has(part)) ?? false;
+  }
+
   isSupported(filePath: string): boolean {
     return byExtension.has(path.extname(filePath).toLowerCase());
   }
@@ -35,15 +45,14 @@ export class ProjectFilter {
   }
 
   private isIgnored(filePath: string, isDirectory: boolean): boolean {
-    const absolute = path.resolve(this.root, filePath);
-    const relative = path.relative(this.root, absolute);
-    if (relative === "") return false;
-    if (relative === ".." || relative.startsWith(`..${path.sep}`)) return true;
+    const parts = this.relativeParts(filePath);
+    if (!parts) return true;
+    if (parts.length === 0) return false;
 
-    const parts = relative.split(path.sep);
-    // .git is tooling; physical .pnpm stores are reached through their logical
-    // symlink paths instead, so packages are indexed and watched exactly once.
-    if (parts.includes(".git") || parts.includes(".pnpm")) return true;
+    // Exclusions are based on the logical route and win inside environments.
+    // A package physically stored under .pnpm remains accepted through a
+    // logical node_modules/pkg symlink that contains no excluded segment.
+    if (parts.some((part) => EXCLUDED_DIRS.has(part))) return true;
     if (parts.some((part) => ENV_DIRS.has(part))) return false;
 
     const active: { directory: string; rules: Rules }[] = [];
@@ -60,6 +69,14 @@ export class ProjectFilter {
       }
     }
     return false;
+  }
+
+  private relativeParts(filePath: string): string[] | null {
+    const absolute = path.resolve(this.root, filePath);
+    const relative = path.relative(this.root, absolute);
+    if (relative === "") return [];
+    if (relative === ".." || relative.startsWith(`..${path.sep}`)) return null;
+    return relative.split(path.sep);
   }
 
   private addRules(directory: string, active: { directory: string; rules: Rules }[]): void {

@@ -175,10 +175,19 @@ const dependencyPhysical = write(
 const dependencyDirectory = path.join(rootA, "node_modules", "dep");
 fs.symlinkSync(path.dirname(dependencyPhysical), dependencyDirectory, "dir");
 const dependencyLogical = path.join(dependencyDirectory, "index.js");
-const dependencyAlias = write(
+const dependencyAliasDirectory = path.join(rootA, "node_modules", "dep-alias");
+fs.symlinkSync(path.dirname(dependencyPhysical), dependencyAliasDirectory, "dir");
+const dependencyAlias = path.join(dependencyAliasDirectory, "index.js");
+const metacharacterPackage = path.join(rootA, "node_modules", "pkg[one]");
+const metacharacterFile = write(
+  metacharacterPackage,
+  "index.js",
+  "export function metacharacterBoundary() { return 1; }\n",
+);
+const globSiblingFile = write(
   rootA,
-  "node_modules/dep-alias/index.js",
-  fs.readFileSync(dependencyPhysical, "utf-8"),
+  "node_modules/pkgo/index.js",
+  "export function metacharacterBoundary() { return 2; }\n",
 );
 const venvModule = write(
   rootA,
@@ -186,6 +195,21 @@ const venvModule = write(
   "def environment_value():\n    return 12\n",
 );
 write(rootB, "b.ts", "export function target(): number { return 2; }\n");
+const projectBehindStoreBacklink = path.join(rootB, "project");
+const backlinkSource = write(
+  projectBehindStoreBacklink,
+  "src/backlink.ts",
+  "export function backlinkSymbol() { return 1; }\n",
+);
+const storeBacklink = path.join(rootB, ".pnpm-store", "v11", "projects", "id");
+fs.mkdirSync(path.dirname(storeBacklink), { recursive: true });
+fs.symlinkSync(projectBehindStoreBacklink, storeBacklink, "dir");
+const cycleNeighbor = write(
+  rootA,
+  "cycle/neighbor.ts",
+  "export function cycleNeighborSymbol() {}\n",
+);
+fs.symlinkSync(rootA, path.join(rootA, "cycle", "back"), "dir");
 const linkedSource = write(home, "linked/source.ts", "export function linkedSymbol() {}\n");
 const sourceSymlink = path.join(rootA, "linked.ts");
 fs.symlinkSync(linkedSource, sourceSymlink);
@@ -225,6 +249,42 @@ try {
     () => executeTool("def", { name: "linkedSymbol", path: sourceSymlink }, rootA),
     /file is not indexed/,
     "file symlinks are not indexed without a watchable logical directory",
+  );
+
+  const backlinkDefinition = await executeTool(
+    "def",
+    { name: "backlinkSymbol", path: projectBehindStoreBacklink },
+    rootB,
+  );
+  assert(
+    resultText(backlinkDefinition).includes(`in ${backlinkSource}:1`) &&
+      !resultText(backlinkDefinition).includes(storeBacklink),
+    "an excluded store backlink cannot suppress the real first-party path",
+  );
+  await rejects(
+    () => executeTool("outline", { path: storeBacklink }, rootB),
+    /directory is not indexed/,
+    ".pnpm-store logical routes are unindexed",
+  );
+  fs.writeFileSync(backlinkSource, "export function backlinkSymbol() {\n  return 2;\n}\n");
+  await eventually(async () => {
+    const result = await executeTool(
+      "def",
+      { name: "backlinkSymbol", path: projectBehindStoreBacklink },
+      rootB,
+    );
+    return resultText(result).includes(`in ${backlinkSource}:1-3`);
+  }, "the normal first-party path behind a store backlink remains watched");
+
+  const cycleDefinition = await executeTool(
+    "def",
+    { name: "cycleNeighborSymbol", path: path.dirname(cycleNeighbor) },
+    rootA,
+  );
+  assert(
+    resultText(cycleDefinition).includes(`in ${cycleNeighbor}:1`) &&
+      !resultText(cycleDefinition).includes(`${path.sep}back${path.sep}`),
+    "an ancestor symlink cycle terminates without suppressing neighboring files",
   );
 
   const callers = await executeTool("callers", { name: "target", path: "src/a.ts" }, rootA);
@@ -284,7 +344,18 @@ try {
       !resultText(originalCopyDefinition).includes(dependencyAlias) &&
       resultText(aliasCopyDefinition).includes(`in ${dependencyAlias}:1-3`) &&
       !resultText(aliasCopyDefinition).includes(dependencyLogical),
-    "identical content remains independently queryable at each logical path",
+    "two directory aliases to one package remain independently queryable",
+  );
+
+  const metacharacterDefinition = await executeTool(
+    "def",
+    { name: "metacharacterBoundary", path: metacharacterPackage },
+    rootA,
+  );
+  assert(
+    resultText(metacharacterDefinition).includes(`in ${metacharacterFile}:1`) &&
+      !resultText(metacharacterDefinition).includes(globSiblingFile),
+    "dependency reconciliation and queries use a literal subtree boundary",
   );
 
   const venvDefinition = await executeTool(
@@ -362,18 +433,54 @@ try {
       resultText(result).includes(`in ${dependencyLogical}:1-4`) &&
       resultText(result).includes("   3 |   return updated;")
     );
-  }, "watcher reindexes dependency changes through the logical scope");
+  }, "a dependency-scoped query reconciles a deep dependency change");
   await rejects(
     () => executeTool("def", { name: "dependencyValue", path: dependencyPhysical }, rootA),
     /file is not indexed/,
-    "dependency events do not create physical .pnpm index rows",
+    "physical .pnpm package files remain unindexed",
+  );
+
+  const newlyInstalledDirectory = path.join(rootA, "node_modules", "new-package");
+  const newlyInstalledFile = write(
+    newlyInstalledDirectory,
+    "index.js",
+    "export function newlyInstalledSymbol() {}\n",
+  );
+  const newlyInstalled = await executeTool(
+    "def",
+    { name: "newlyInstalledSymbol", path: newlyInstalledDirectory },
+    rootA,
+  );
+  assert(
+    resultText(newlyInstalled).includes(`in ${newlyInstalledFile}:1`),
+    "a newly installed package is indexed by its first scoped query",
+  );
+  fs.writeFileSync(newlyInstalledFile, "export function replacementPackageSymbol() {}\n");
+  const removedPackageSymbol = await executeTool(
+    "def",
+    { name: "newlyInstalledSymbol", path: newlyInstalledDirectory },
+    rootA,
+  );
+  const replacementPackageSymbol = await executeTool(
+    "def",
+    { name: "replacementPackageSymbol", path: newlyInstalledDirectory },
+    rootA,
+  );
+  assert(
+    resultText(removedPackageSymbol) === 'No definition found for "newlyInstalledSymbol"' &&
+      resultText(replacementPackageSymbol).includes(`in ${newlyInstalledFile}:1`),
+    "a package-scoped query removes rewritten dependency symbols",
   );
 
   fs.rmSync(path.dirname(dependencyPhysical), { recursive: true, force: true });
   await eventually(async () => {
-    const result = await executeTool("def", { name: "dependencyValue" }, rootA);
+    const result = await executeTool(
+      "def",
+      { name: "dependencyValue", path: path.join(rootA, "node_modules") },
+      rootA,
+    );
     return resultText(result) === 'No definition found for "dependencyValue"';
-  }, "watcher removes dependency symbols when their physical package is deleted");
+  }, "a dependency subtree query removes files deleted below that boundary");
 
   write(
     rootA,
@@ -395,7 +502,7 @@ try {
       rootA,
     );
     return resultText(result).includes(`in ${dependencyLogical}:5`);
-  }, "replacing a dependency symlink target refreshes the logical dependency rows");
+  }, "querying a replaced dependency symlink refreshes its logical rows");
   await eventually(async () => {
     const result = await executeTool(
       "def",
@@ -406,7 +513,7 @@ try {
       resultText(result).includes(`in ${deepLogical}:1`) &&
       !resultText(result).includes(deepPhysical)
     );
-  }, "a new deep file behind the dependency symlink is indexed through its logical path");
+  }, "a scoped query adds a new deep file through its logical path");
 
   fs.writeFileSync(
     dependencyPhysical,
@@ -422,24 +529,24 @@ try {
       resultText(result).includes(`in ${dependencyLogical}:5-7`) &&
       resultText(result).includes("   6 |   return 8;")
     );
-  }, "the root of a replaced directory symlink remains watched");
+  }, "a changed file at a replaced dependency symlink is reconciled on query");
 
   fs.writeFileSync(deepPhysical, "export function deepDependencySymbol() {\n  return 42;\n}\n");
   await eventually(async () => {
     const result = await executeTool(
       "def",
-      { name: "deepDependencySymbol", path: dependencyDirectory },
+      { name: "deepDependencySymbol", path: deepLogical },
       rootA,
     );
     return (
       resultText(result).includes(`in ${deepLogical}:1-3`) &&
       resultText(result).includes("   2 |   return 42;")
     );
-  }, "a deep change behind the dependency symlink reindexes the logical path");
+  }, "an exact dependency file query reconciles without a recursive watch");
   await rejects(
     () => executeTool("def", { name: "deepDependencySymbol", path: deepPhysical }, rootA),
     /file is not indexed/,
-    "deep dependency events do not create physical .pnpm index rows",
+    "deep physical .pnpm files remain unindexed",
   );
 
   console.log("\nFilesystem lifecycle...");

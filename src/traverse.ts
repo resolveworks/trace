@@ -11,91 +11,100 @@ export interface DirectoryListing {
 }
 
 export interface DirectoryTarget {
-  realpath: string;
   device: bigint;
   inode: bigint;
 }
 
+export type TraversalMode = "index" | "watch";
+
 /**
- * Walk the included directories under dir in deterministic readdir order,
- * following directory symlinks by their logical paths. Physical `.pnpm`
- * stores and `.git` are excluded by the filter; `node_modules` and `.venv`
- * are included despite `.gitignore`. A shared realpath set guards against
- * symlink cycles and duplicate physical targets: the first logical path to
- * reach a target wins.
+ * Walk included directories in deterministic readdir order, following
+ * directory symlinks through their logical paths. Index mode enters installed
+ * environments; watch mode stops before them.
  *
- * `onDirectory` fires for each included directory before its entries are
- * read, so watchers can be established on a parent before its children are
- * scanned and no entry created during the walk is missed.
+ * Physical identity is only a cycle guard. An identity is suppressed while it
+ * is already on the current recursion branch, then released so independent
+ * logical aliases remain independently traversable.
+ *
+ * `onDirectory` fires before entries are read, allowing first-party watchers
+ * to be established on each parent before its children are scanned.
  */
 export function walkDirectories(
   filter: ProjectFilter,
   dir = filter.root,
   onDirectory?: (directory: string, target: DirectoryTarget) => void,
+  mode: TraversalMode = "index",
 ): DirectoryListing[] {
+  if (dir !== filter.root && !mayEnter(filter, dir, mode)) return [];
+
   const rootStat = fs.statSync(dir, { bigint: true });
-  if (!rootStat.isDirectory()) throw new Error(`not a directory: ${dir}`);
-  const rootTarget = {
-    realpath: fs.realpathSync(dir),
-    device: rootStat.dev,
-    inode: rootStat.ino,
-  };
+  if (!rootStat.isDirectory()) {
+    if (dir !== filter.root) return [];
+    throw new Error(`not a directory: ${dir}`);
+  }
+  const rootTarget = { device: rootStat.dev, inode: rootStat.ino };
   const listings: DirectoryListing[] = [];
-  const visited = new Set<string>([rootTarget.realpath]);
+  const ancestors = new Set<string>();
 
   const visit = (current: string, target: DirectoryTarget): void => {
-    onDirectory?.(current, target);
-    const files: string[] = [];
-    listings.push({ directory: current, files });
-
-    let entries: fs.Dirent[];
+    const identity = `${target.device}:${target.inode}`;
+    if (ancestors.has(identity)) return;
+    ancestors.add(identity);
     try {
-      entries = fs
-        .readdirSync(current, { withFileTypes: true })
-        .sort((a, b) => a.name.localeCompare(b.name));
-    } catch (error) {
-      if (current !== dir && isPathMissing(error)) return;
-      throw error;
-    }
+      onDirectory?.(current, target);
+      const files: string[] = [];
+      listings.push({ directory: current, files });
 
-    for (const entry of entries) {
-      const file = path.join(current, entry.name);
-      let isDirectory = entry.isDirectory();
-      const isFile = entry.isFile();
-      let directoryStat: fs.BigIntStats | null = null;
-
-      if (entry.isSymbolicLink()) {
-        try {
-          directoryStat = fs.statSync(file, { bigint: true });
-          isDirectory = directoryStat.isDirectory();
-        } catch (error) {
-          if (isPathMissing(error)) continue;
-          throw error;
-        }
+      let entries: fs.Dirent[];
+      try {
+        entries = fs
+          .readdirSync(current, { withFileTypes: true })
+          .sort((a, b) => a.name.localeCompare(b.name));
+      } catch (error) {
+        if (current !== dir && isPathMissing(error)) return;
+        throw error;
       }
 
-      if (isDirectory && filter.includesDirectory(file)) {
-        try {
-          directoryStat ??= fs.statSync(file, { bigint: true });
-          if (!directoryStat.isDirectory()) continue;
-          const realpath = fs.realpathSync(file);
-          if (visited.has(realpath)) continue;
-          visited.add(realpath);
-          visit(file, {
-            realpath,
-            device: directoryStat.dev,
-            inode: directoryStat.ino,
-          });
-        } catch (error) {
-          if (isPathMissing(error)) continue;
-          throw error;
+      for (const entry of entries) {
+        const file = path.join(current, entry.name);
+        let isDirectory = entry.isDirectory();
+        const isFile = entry.isFile();
+        let directoryStat: fs.BigIntStats | null = null;
+
+        if (entry.isSymbolicLink()) {
+          try {
+            directoryStat = fs.statSync(file, { bigint: true });
+            isDirectory = directoryStat.isDirectory();
+          } catch (error) {
+            if (isPathMissing(error)) continue;
+            throw error;
+          }
         }
-      } else if (isFile && filter.includesFile(file)) {
-        files.push(file);
+
+        if (isDirectory && mayEnter(filter, file, mode)) {
+          try {
+            directoryStat ??= fs.statSync(file, { bigint: true });
+            if (!directoryStat.isDirectory()) continue;
+            visit(file, { device: directoryStat.dev, inode: directoryStat.ino });
+          } catch (error) {
+            if (isPathMissing(error)) continue;
+            throw error;
+          }
+        } else if (isFile && filter.includesFile(file)) {
+          files.push(file);
+        }
       }
+    } finally {
+      ancestors.delete(identity);
     }
   };
 
   visit(dir, rootTarget);
   return listings;
+}
+
+function mayEnter(filter: ProjectFilter, directory: string, mode: TraversalMode): boolean {
+  return mode === "index"
+    ? filter.includesDirectory(directory)
+    : filter.mayWatchDirectory(directory);
 }

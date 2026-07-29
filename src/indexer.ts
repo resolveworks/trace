@@ -4,10 +4,11 @@ import { Parser, type Node as SyntaxNode } from "web-tree-sitter";
 import { isPathMissing } from "./fs-errors.ts";
 import { getLanguageForFile, initializeLanguages, type LoadedLang } from "./languages.ts";
 import { ProjectFilter } from "./project-filter.ts";
-import { walkDirectories } from "./traverse.ts";
+import { walkDirectories, type TraversalMode } from "./traverse.ts";
 import { contains } from "./config.ts";
 import {
   deleteFiles,
+  getIndexedFile,
   getIndexedFiles,
   insertCall,
   insertSymbol,
@@ -41,16 +42,30 @@ export interface IndexResult {
   removed: number;
 }
 
-export function indexRoot(rootId: number, filter: ProjectFilter, dir = filter.root): IndexResult {
+export function indexRoot(
+  rootId: number,
+  filter: ProjectFilter,
+  dir = filter.root,
+  traversalMode: TraversalMode = "index",
+): IndexResult {
   getParser();
-  const files = walkDirectories(filter, dir).flatMap((listing) => listing.files);
+  let files: string[];
+  try {
+    files = walkDirectories(filter, dir, undefined, traversalMode).flatMap(
+      (listing) => listing.files,
+    );
+  } catch (error) {
+    if (dir === filter.root || !isPathMissing(error)) throw error;
+    files = [];
+  }
   const indexed = getIndexedFiles(rootId);
   const present = new Set<string>();
   let changed = 0;
 
   for (const file of files) {
     try {
-      const stat = statFile(file);
+      const stat = statSourceFile(file);
+      if (!stat) continue;
       const current = indexed.get(file);
       if (!current || !sameStat(current, stat)) {
         indexSourceFile(rootId, file, stat);
@@ -64,6 +79,7 @@ export function indexRoot(rootId: number, filter: ProjectFilter, dir = filter.ro
 
   const missing: string[] = [];
   for (const file of indexed.keys()) {
+    if (traversalMode === "watch" && filter.isEnvironmentPath(file)) continue;
     if (contains(dir, file) && !present.has(file)) missing.push(file);
   }
   deleteFiles(missing);
@@ -75,16 +91,41 @@ export function indexRoot(rootId: number, filter: ProjectFilter, dir = filter.ro
 export function reindexFile(rootId: number, file: string): void {
   getParser();
   try {
-    indexSourceFile(rootId, file, statFile(file));
+    const stat = statSourceFile(file);
+    if (stat) indexSourceFile(rootId, file, stat);
+    else deleteFiles([file]);
   } catch (error) {
     if (!isPathMissing(error)) throw error;
     deleteFiles([file]);
   }
 }
 
-/** Freshness hint from a stat. */
-function statFile(file: string): FileStat {
-  const stats = fs.statSync(file, { bigint: true });
+/** Stat-based reconciliation for an exact dependency query scope. */
+export function reconcileFile(rootId: number, filter: ProjectFilter, file: string): void {
+  getParser();
+  if (!filter.includesFile(file)) {
+    deleteFiles([file]);
+    return;
+  }
+
+  try {
+    const stat = statSourceFile(file);
+    if (!stat) {
+      deleteFiles([file]);
+      return;
+    }
+    const current = getIndexedFile(file);
+    if (!current || !sameStat(current, stat)) indexSourceFile(rootId, file, stat);
+  } catch (error) {
+    if (!isPathMissing(error)) throw error;
+    deleteFiles([file]);
+  }
+}
+
+/** Freshness hint for a regular, non-symlink source file. */
+function statSourceFile(file: string): FileStat | null {
+  const stats = fs.lstatSync(file, { bigint: true });
+  if (!stats.isFile()) return null;
   return { size: stats.size, mtimeNs: stats.mtimeNs };
 }
 
