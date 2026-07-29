@@ -6,17 +6,12 @@ import { byExtension } from "./languages.ts";
 
 type Rules = ReturnType<typeof ignore>;
 
-export const ENV_DIRS: ReadonlySet<string> = new Set(["node_modules", ".venv"]);
+const ENV_DIRS: ReadonlySet<string> = new Set(["node_modules", ".venv"]);
 const EXCLUDED_DIRS: ReadonlySet<string> = new Set([".git", ".pnpm", ".pnpm-store"]);
 
 /** Central lexical path policy for reconciliation and queries. */
-export class ProjectFilter {
-  readonly root: string;
+export class SourceFilter {
   private readonly cache = new Map<string, Rules | null>();
-
-  constructor(root: string) {
-    this.root = path.resolve(root);
-  }
 
   includesFile(filePath: string): boolean {
     return this.isSupported(filePath) && !this.isIgnored(filePath, false);
@@ -27,7 +22,7 @@ export class ProjectFilter {
   }
 
   isEnvironmentPath(filePath: string): boolean {
-    return this.relativeParts(filePath)?.some((part) => ENV_DIRS.has(part)) ?? false;
+    return this.pathParts(filePath).parts.some((part) => ENV_DIRS.has(part));
   }
 
   private isSupported(filePath: string): boolean {
@@ -40,8 +35,7 @@ export class ProjectFilter {
   }
 
   private isIgnored(filePath: string, isDirectory: boolean): boolean {
-    const parts = this.relativeParts(filePath);
-    if (!parts) return true;
+    const { root, parts } = this.pathParts(filePath);
     if (parts.length === 0) return false;
 
     // Exclusions are based on the logical route and win inside environments.
@@ -51,7 +45,7 @@ export class ProjectFilter {
     if (parts.some((part) => ENV_DIRS.has(part))) return false;
 
     const active: { directory: string; rules: Rules }[] = [];
-    let directory = this.root;
+    let directory = root;
     this.addRules(directory, active);
 
     for (let index = 0; index < parts.length; index++) {
@@ -66,12 +60,11 @@ export class ProjectFilter {
     return false;
   }
 
-  private relativeParts(filePath: string): string[] | null {
-    const absolute = path.resolve(this.root, filePath);
-    const relative = path.relative(this.root, absolute);
-    if (relative === "") return [];
-    if (relative === ".." || relative.startsWith(`..${path.sep}`)) return null;
-    return relative.split(path.sep);
+  private pathParts(filePath: string): { root: string; parts: string[] } {
+    const absolute = path.resolve(filePath);
+    const root = path.parse(absolute).root;
+    const relative = path.relative(root, absolute);
+    return { root, parts: relative ? relative.split(path.sep) : [] };
   }
 
   private addRules(directory: string, active: { directory: string; rules: Rules }[]): void {

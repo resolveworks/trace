@@ -33,8 +33,8 @@ async function rejects(action: () => Promise<unknown>, pattern: RegExp, message:
   }
 }
 
-function write(root: string, file: string, content: string): string {
-  const target = path.join(root, file);
+function write(base: string, file: string, content: string): string {
+  const target = path.join(base, file);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, content);
   return target;
@@ -101,21 +101,20 @@ async function stopDaemon(daemon: ChildProcessWithoutNullStreams): Promise<void>
 
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "trace-test-"));
 const home = path.join(temporary, "home");
-const rootA = path.join(home, "workspace", "root-a");
-const rootB = path.join(home, "workspace", "root-b");
-const configDirectory = path.join(home, ".pi", "agent");
-const socket = path.join(configDirectory, "extensions", "trace", "trace.sock");
+const projectA = path.join(home, "workspace", "project-a");
+const projectB = path.join(home, "workspace", "project-b");
+const stateDirectory = path.join(home, ".pi", "agent", "extensions", "trace");
+const socket = path.join(stateDirectory, "trace.sock");
 const originalEnvironment = {
   HOME: process.env.HOME,
-  TRACE_PATH: process.env.TRACE_PATH,
   TRACE_DB: process.env.TRACE_DB,
   TRACE_SOCKET: process.env.TRACE_SOCKET,
 };
 
-fs.mkdirSync(rootA, { recursive: true });
-fs.mkdirSync(rootB, { recursive: true });
+fs.mkdirSync(projectA, { recursive: true });
+fs.mkdirSync(projectB, { recursive: true });
 const source = write(
-  rootA,
+  projectA,
   "src/a.ts",
   [
     "export function target(value: number): number {",
@@ -130,16 +129,16 @@ const source = write(
     "",
   ].join("\n"),
 );
-const empty = write(rootA, "empty.ts", "// indexed, with no symbols\n");
+const empty = write(projectA, "empty.ts", "// indexed, with no symbols\n");
 const sharedSource = write(
-  rootA,
+  projectA,
   "shared.ts",
   "export function sharedEnvironmentValue(): number { return 10; }\n",
 );
-write(rootA, ".gitignore", "ignored.ts\nnode_modules/\n.venv/\n");
-const ignored = write(rootA, "ignored.ts", "export function ignoredSymbol() {}\n");
+write(projectA, ".gitignore", "ignored.ts\nnode_modules/\n.venv/\n");
+const ignored = write(projectA, "ignored.ts", "export function ignoredSymbol() {}\n");
 const dependencyPhysical = write(
-  rootA,
+  projectA,
   "node_modules/.pnpm/dep@1.0.0/node_modules/dep/index.js",
   [
     "export function dependencyValue() {",
@@ -156,44 +155,46 @@ const dependencyPhysical = write(
     "",
   ].join("\n"),
 );
-const dependencyDirectory = path.join(rootA, "node_modules", "dep");
+const dependencyDirectory = path.join(projectA, "node_modules", "dep");
 fs.symlinkSync(path.dirname(dependencyPhysical), dependencyDirectory, "dir");
 const dependencyLogical = path.join(dependencyDirectory, "index.js");
-const dependencyAliasDirectory = path.join(rootA, "node_modules", "dep-alias");
+const dependencyAliasDirectory = path.join(projectA, "node_modules", "dep-alias");
 fs.symlinkSync(path.dirname(dependencyPhysical), dependencyAliasDirectory, "dir");
 const dependencyAlias = path.join(dependencyAliasDirectory, "index.js");
 const venvModule = write(
-  rootA,
+  projectA,
   ".venv/lib/python3.12/site-packages/pkg/mod.py",
   "def environment_value():\n    return 12\n",
 );
-write(rootB, "b.ts", "export function target(): number { return 2; }\n");
-const projectBehindStoreBacklink = path.join(rootB, "project");
+write(projectB, "b.ts", "export function target(): number { return 2; }\n");
+const projectBehindStoreBacklink = path.join(projectB, "project");
 const backlinkSource = write(
   projectBehindStoreBacklink,
   "src/backlink.ts",
   "export function backlinkSymbol() { return 1; }\n",
 );
-const storeBacklink = path.join(rootB, ".pnpm-store", "v11", "projects", "id");
+const storeBacklink = path.join(projectB, ".pnpm-store", "v11", "projects", "id");
 fs.mkdirSync(path.dirname(storeBacklink), { recursive: true });
 fs.symlinkSync(projectBehindStoreBacklink, storeBacklink, "dir");
 const cycleNeighbor = write(
-  rootA,
+  projectA,
   "cycle/neighbor.ts",
   "export function cycleNeighborSymbol() {}\n",
 );
-fs.symlinkSync(rootA, path.join(rootA, "cycle", "back"), "dir");
+fs.symlinkSync(projectA, path.join(projectA, "cycle", "back"), "dir");
 const linkedSource = write(home, "linked/source.ts", "export function linkedSymbol() {}\n");
-const sourceSymlink = path.join(rootA, "linked.ts");
+const sourceSymlink = path.join(projectA, "linked.ts");
 fs.symlinkSync(linkedSource, sourceSymlink);
-fs.mkdirSync(configDirectory, { recursive: true });
-fs.writeFileSync(
-  path.join(configDirectory, "trace.json"),
-  JSON.stringify({ roots: [rootA, rootB] }),
+const externalSource = write(
+  temporary,
+  "elsewhere/external.ts",
+  "export function externalSymbol() { return 42; }\n",
 );
+const emptyDirectory = path.join(temporary, "elsewhere/empty");
+fs.mkdirSync(emptyDirectory, { recursive: true });
+fs.mkdirSync(stateDirectory, { recursive: true });
 
 process.env.HOME = home;
-delete process.env.TRACE_PATH;
 delete process.env.TRACE_DB;
 delete process.env.TRACE_SOCKET;
 
@@ -202,7 +203,7 @@ try {
   daemon = await startDaemon(socket);
 
   console.log("Core tool contract...");
-  const definition = await executeTool("def", { name: "target" }, rootA);
+  const definition = await executeTool("def", { name: "target" }, projectA);
   const expectedDefinition = [
     '1 definition of "target":',
     "",
@@ -218,7 +219,7 @@ try {
   );
 
   await rejects(
-    () => executeTool("def", { name: "linkedSymbol", path: sourceSymlink }, rootA),
+    () => executeTool("def", { name: "linkedSymbol", path: sourceSymlink }, projectA),
     /file is not accepted source/,
     "file symlinks are rejected",
   );
@@ -226,22 +227,22 @@ try {
   const backlinkDefinition = await executeTool(
     "def",
     { name: "backlinkSymbol", path: projectBehindStoreBacklink },
-    rootB,
+    projectB,
   );
   assert(
     resultText(backlinkDefinition).includes(`in ${backlinkSource}:1`) &&
       !resultText(backlinkDefinition).includes(storeBacklink),
-    "an excluded store backlink cannot suppress the real first-party path",
+    "an excluded store backlink cannot suppress the accepted logical path",
   );
-  await rejects(
-    () => executeTool("outline", { path: storeBacklink }, rootB),
-    /directory contains no accepted source files/,
-    ".pnpm-store logical routes are rejected",
+  const storeOutline = await executeTool("outline", { path: storeBacklink }, projectB);
+  assert(
+    resultText(storeOutline) === `No symbols found in "${storeBacklink}"`,
+    ".pnpm-store logical routes remain excluded",
   );
   const cycleDefinition = await executeTool(
     "def",
     { name: "cycleNeighborSymbol", path: path.dirname(cycleNeighbor) },
-    rootA,
+    projectA,
   );
   assert(
     resultText(cycleDefinition).includes(`in ${cycleNeighbor}:1`) &&
@@ -249,14 +250,14 @@ try {
     "an ancestor symlink cycle terminates without suppressing neighboring files",
   );
 
-  const callers = await executeTool("callers", { name: "target", path: "src/a.ts" }, rootA);
+  const callers = await executeTool("callers", { name: "target", path: "src/a.ts" }, projectA);
   assert(
     resultText(callers) ===
       `${source}:7 — called in increment (method_definition)\n   7 |     return target(value);`,
     "callers resolves a relative path and reports source context",
   );
 
-  const outline = await executeTool("outline", { path: path.dirname(source) }, rootB);
+  const outline = await executeTool("outline", { path: path.dirname(source) }, projectB);
   assert(
     resultText(outline) ===
       [
@@ -272,7 +273,7 @@ try {
   const dependencyDefinition = await executeTool(
     "def",
     { name: "dependencyValue", path: dependencyDirectory },
-    rootA,
+    projectA,
   );
   assert(
     resultText(dependencyDefinition).includes(
@@ -284,7 +285,7 @@ try {
   const aliasDefinition = await executeTool(
     "def",
     { name: "dependencyValue", path: dependencyAlias },
-    rootA,
+    projectA,
   );
   assert(
     !resultText(dependencyDefinition).includes(dependencyAlias) &&
@@ -296,7 +297,7 @@ try {
   const venvDefinition = await executeTool(
     "def",
     { name: "environment_value", path: path.dirname(venvModule) },
-    rootA,
+    projectA,
   );
   assert(
     resultText(venvDefinition).includes(`function_definition environment_value in ${venvModule}`),
@@ -306,12 +307,12 @@ try {
   const projectSharedDefinition = await executeTool(
     "def",
     { name: "sharedEnvironmentValue" },
-    rootA,
+    projectA,
   );
   const dependencySharedDefinition = await executeTool(
     "def",
     { name: "sharedEnvironmentValue", path: dependencyDirectory },
-    rootA,
+    projectA,
   );
   assert(
     resultText(projectSharedDefinition).includes(`in ${sharedSource}:1`) &&
@@ -325,14 +326,14 @@ try {
   const projectSharedCallers = await executeTool(
     "callers",
     { name: "sharedEnvironmentValue" },
-    rootA,
+    projectA,
   );
   assert(
     resultText(projectSharedCallers) === 'No callers found for "sharedEnvironmentValue"',
     "project-scoped callers exclude call sites in dependency environments",
   );
 
-  const projectOutline = await executeTool("outline", {}, rootA);
+  const projectOutline = await executeTool("outline", {}, projectA);
   assert(
     resultText(projectOutline).includes(`${sharedSource}:`) &&
       !resultText(projectOutline).includes(dependencyLogical) &&
@@ -341,17 +342,21 @@ try {
   );
 
   await rejects(
-    () => executeTool("def", { name: "dependencyValue", path: dependencyPhysical }, rootA),
+    () => executeTool("def", { name: "dependencyValue", path: dependencyPhysical }, projectA),
     /file is not accepted source/,
     "physical .pnpm package files remain excluded",
   );
 
   console.log("\nFilesystem lifecycle...");
-  const replacedScope = write(rootA, "replaced.ts", "export function formerFileSymbol() {}\n");
-  await executeTool("outline", { path: replacedScope }, rootA);
+  const replacedScope = write(projectA, "replaced.ts", "export function formerFileSymbol() {}\n");
+  await executeTool("outline", { path: replacedScope }, projectA);
   fs.unlinkSync(replacedScope);
   write(replacedScope, "child.ts", "export function directoryChildSymbol() {}\n");
-  const replacementDirectoryOutline = await executeTool("outline", { path: replacedScope }, rootA);
+  const replacementDirectoryOutline = await executeTool(
+    "outline",
+    { path: replacedScope },
+    projectA,
+  );
   assert(
     resultText(replacementDirectoryOutline).includes("directoryChildSymbol") &&
       !resultText(replacementDirectoryOutline).includes("formerFileSymbol"),
@@ -360,22 +365,26 @@ try {
 
   fs.rmSync(replacedScope, { recursive: true });
   fs.writeFileSync(replacedScope, "export function replacementFileSymbol() {}\n");
-  const replacementFileOutline = await executeTool("outline", { path: replacedScope }, rootA);
+  const replacementFileOutline = await executeTool("outline", { path: replacedScope }, projectA);
   assert(
     resultText(replacementFileOutline).includes("replacementFileSymbol") &&
       !resultText(replacementFileOutline).includes("directoryChildSymbol"),
     "replacing a directory with a file removes descendant rows",
   );
 
-  const nestedFile = write(rootA, "nested/deep/nested.ts", "export function nestedSymbol() {}\n");
-  const nestedSymbol = await executeTool("def", { name: "nestedSymbol" }, rootA);
+  const nestedFile = write(
+    projectA,
+    "nested/deep/nested.ts",
+    "export function nestedSymbol() {}\n",
+  );
+  const nestedSymbol = await executeTool("def", { name: "nestedSymbol" }, projectA);
   assert(
     resultText(nestedSymbol).includes("function_declaration nestedSymbol"),
     "a file added in a nested directory is indexed",
   );
   fs.writeFileSync(nestedFile, "export function renamedNestedSymbol() {}\n");
-  const removedNestedSymbol = await executeTool("def", { name: "nestedSymbol" }, rootA);
-  const renamedNestedSymbol = await executeTool("def", { name: "renamedNestedSymbol" }, rootA);
+  const removedNestedSymbol = await executeTool("def", { name: "nestedSymbol" }, projectA);
+  const renamedNestedSymbol = await executeTool("def", { name: "renamedNestedSymbol" }, projectA);
   assert(
     resultText(removedNestedSymbol) === 'No definition found for "nestedSymbol"' &&
       resultText(renamedNestedSymbol).includes("function_declaration renamedNestedSymbol"),
@@ -385,7 +394,7 @@ try {
   const removedRenamedNestedSymbol = await executeTool(
     "def",
     { name: "renamedNestedSymbol" },
-    rootA,
+    projectA,
   );
   assert(
     resultText(removedRenamedNestedSymbol) === 'No definition found for "renamedNestedSymbol"',
@@ -393,33 +402,43 @@ try {
   );
 
   console.log("\nScope and failure contract...");
-  const emptyOutline = await executeTool("outline", { path: empty }, rootA);
+  const emptyOutline = await executeTool("outline", { path: empty }, projectA);
   assert(
     resultText(emptyOutline) === `No symbols found in "${empty}"`,
     "an indexed file may have no symbols",
   );
   await rejects(
-    () => executeTool("outline", { path: ignored }, rootA),
+    () => executeTool("outline", { path: ignored }, projectA),
     /file is not accepted source/,
     "a gitignored file is rejected",
   );
-  await rejects(
-    () => executeTool("outline", { path: home }, rootA),
-    new RegExp(`outside configured roots:.*roots: ${rootA}, ${rootB}`),
-    "an outside-roots error lists the configured roots",
+  const externalDefinition = await executeTool(
+    "def",
+    { name: "externalSymbol", path: externalSource },
+    projectA,
+  );
+  assert(
+    resultText(externalDefinition).includes(`in ${externalSource}:1`),
+    "an absolute scope is searchable without prior configuration",
+  );
+
+  const emptyDirectoryOutline = await executeTool("outline", { path: emptyDirectory }, projectA);
+  assert(
+    resultText(emptyDirectoryOutline) === `No symbols found in "${emptyDirectory}"`,
+    "an empty directory is a valid scope",
   );
 
   console.log("\n.gitignore lifecycle...");
-  const gitignore = path.join(rootA, ".gitignore");
+  const gitignore = path.join(projectA, ".gitignore");
   const originalGitignore = fs.readFileSync(gitignore, "utf-8");
   fs.writeFileSync(gitignore, originalGitignore.replace("ignored.ts\n", ""));
-  const unignoredSymbol = await executeTool("def", { name: "ignoredSymbol" }, rootA);
+  const unignoredSymbol = await executeTool("def", { name: "ignoredSymbol" }, projectA);
   assert(
     resultText(unignoredSymbol).includes("function_declaration ignoredSymbol"),
     "a newly unignored file appears in the index",
   );
   fs.writeFileSync(gitignore, originalGitignore);
-  const reignoredSymbol = await executeTool("def", { name: "ignoredSymbol" }, rootA);
+  const reignoredSymbol = await executeTool("def", { name: "ignoredSymbol" }, projectA);
   assert(
     resultText(reignoredSymbol) === 'No definition found for "ignoredSymbol"',
     "restoring the .gitignore re-ignores its files",
@@ -428,7 +447,7 @@ try {
   await stopDaemon(daemon);
   daemon = null;
   await rejects(
-    () => executeTool("outline", {}, rootA),
+    () => executeTool("outline", {}, projectA),
     /ENOENT|ECONNREFUSED/,
     "daemon unavailability is a hard error",
   );

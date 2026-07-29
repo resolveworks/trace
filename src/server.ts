@@ -2,12 +2,12 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import { Value } from "typebox/value";
-import { getTraceDbPath, getTraceRoots, getTraceSocketPath, contains } from "./config.ts";
+import { getTraceDbPath, getTraceSocketPath } from "./paths.ts";
 import { isPathMissing } from "./fs-errors.ts";
-import { closeDb, findCallers, findDefinition, getOutline, openDb, syncRoots } from "./db.ts";
+import { closeDb, findCallers, findDefinition, getOutline, openDb } from "./db.ts";
 import { closeIndexer, initializeIndexer, reconcileDirectory, reconcileFile } from "./indexer.ts";
 import { closeLanguages } from "./languages.ts";
-import { ProjectFilter } from "./project-filter.ts";
+import { SourceFilter } from "./source-filter.ts";
 import {
   TraceRequestSchema,
   type TraceRequest,
@@ -15,26 +15,18 @@ import {
   type TraceResult,
 } from "./protocol.ts";
 
-interface RootContext {
-  id: number;
-  path: string;
-  filter: ProjectFilter;
-}
-
 class RequestError extends Error {}
 
 export class TraceServer {
   private readonly socketPath: string;
   private readonly databasePath: string;
-  private readonly rootPaths: string[];
-  private roots: RootContext[] = [];
+  private readonly filter = new SourceFilter();
   private server: net.Server | null = null;
   private readonly sockets = new Set<net.Socket>();
 
   constructor(environment: NodeJS.ProcessEnv = process.env) {
     this.socketPath = getTraceSocketPath(environment);
     this.databasePath = getTraceDbPath(environment);
-    this.rootPaths = getTraceRoots(environment);
   }
 
   async start(): Promise<void> {
@@ -42,13 +34,6 @@ export class TraceServer {
     fs.mkdirSync(path.dirname(this.databasePath), { recursive: true, mode: 0o700 });
     fs.mkdirSync(path.dirname(this.socketPath), { recursive: true, mode: 0o700 });
     openDb(this.databasePath);
-
-    const rootIds = syncRoots(this.rootPaths);
-    this.roots = this.rootPaths.map((root) => ({
-      id: rootIds.get(root)!,
-      path: root,
-      filter: new ProjectFilter(root),
-    }));
 
     this.server = net.createServer((socket) => this.accept(socket));
     await new Promise<void>((resolve, reject) => {
@@ -145,21 +130,14 @@ export class TraceServer {
       throw new RequestError(`scope is not a file or directory: ${scope}`);
     }
 
-    const root = this.roots.find((candidate) => contains(candidate.path, scope));
-    if (!root) {
-      throw new RequestError(
-        `scope is outside configured roots: ${scope} (roots: ${this.rootPaths.join(", ")})`,
-      );
-    }
-
-    root.filter.invalidate();
-    const includeEnvironments = root.filter.isEnvironmentPath(scope);
+    this.filter.invalidate();
+    const includeEnvironments = this.filter.isEnvironmentPath(scope);
     if (isFile) {
-      if (!reconcileFile(root.id, root.filter, scope)) {
+      if (!reconcileFile(this.filter, scope)) {
         throw new RequestError(`file is not accepted source: ${scope}`);
       }
-    } else if (reconcileDirectory(root.id, root.filter, scope) === 0 && scope !== root.path) {
-      throw new RequestError(`directory contains no accepted source files: ${scope}`);
+    } else {
+      reconcileDirectory(this.filter, scope);
     }
     return { scope, includeEnvironments };
   }

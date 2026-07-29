@@ -1,25 +1,22 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isPathMissing } from "./fs-errors.ts";
-import type { ProjectFilter } from "./project-filter.ts";
+import type { SourceFilter } from "./source-filter.ts";
 
 /**
  * Find supported source files in deterministic order. Directory symlinks keep
  * their logical paths; physical identity prevents cycles only on the current
  * recursion branch, so independent aliases remain independently queryable.
  *
- * A project scope does not enter installed environments. A scope already
+ * A scope outside an installed environment does not enter one. A scope already
  * inside an environment does, making dependency indexing entirely on demand.
  */
-export function walkSourceFiles(filter: ProjectFilter, dir: string): string[] {
+export function walkSourceFiles(filter: SourceFilter, dir: string): string[] {
   const includeEnvironments = filter.isEnvironmentPath(dir);
-  if (dir !== filter.root && !mayEnter(filter, dir, includeEnvironments)) return [];
+  if (!mayEnter(filter, dir, includeEnvironments)) return [];
 
   const rootStat = fs.statSync(dir, { bigint: true });
-  if (!rootStat.isDirectory()) {
-    if (dir !== filter.root) return [];
-    throw new Error(`not a directory: ${dir}`);
-  }
+  if (!rootStat.isDirectory()) throw new Error(`not a directory: ${dir}`);
 
   const files: string[] = [];
   const ancestors = new Set<string>();
@@ -74,7 +71,7 @@ export function walkSourceFiles(filter: ProjectFilter, dir: string): string[] {
   return files;
 }
 
-function mayEnter(filter: ProjectFilter, directory: string, includeEnvironments: boolean): boolean {
+function mayEnter(filter: SourceFilter, directory: string, includeEnvironments: boolean): boolean {
   return (
     filter.includesDirectory(directory) &&
     (includeEnvironments || !filter.isEnvironmentPath(directory))

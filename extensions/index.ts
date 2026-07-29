@@ -9,7 +9,7 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { requestTrace } from "../src/client.ts";
-import { getTraceSocketPath } from "../src/config.ts";
+import { getTraceSocketPath } from "../src/paths.ts";
 import type { DirSymbol, OutlineSymbol } from "../src/db.ts";
 
 const FUNCTION_LIKE_KINDS = new Set([

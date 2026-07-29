@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import { Parser, type Node as SyntaxNode } from "web-tree-sitter";
 import { isPathMissing } from "./fs-errors.ts";
 import { getLanguageForFile, initializeLanguages, type LoadedLang } from "./languages.ts";
-import { ProjectFilter } from "./project-filter.ts";
+import { SourceFilter } from "./source-filter.ts";
 import { walkSourceFiles } from "./traverse.ts";
 import {
   deleteFiles,
@@ -35,13 +35,13 @@ function getParser(): Parser {
 }
 
 /** Reconcile one directory and remove stale rows within the same query domain. */
-export function reconcileDirectory(rootId: number, filter: ProjectFilter, dir: string): number {
+export function reconcileDirectory(filter: SourceFilter, dir: string): void {
   getParser();
   let files: string[];
   try {
     files = walkSourceFiles(filter, dir);
   } catch (error) {
-    if (dir === filter.root || !isPathMissing(error)) throw error;
+    if (!isPathMissing(error)) throw error;
     files = [];
   }
 
@@ -54,7 +54,7 @@ export function reconcileDirectory(rootId: number, filter: ProjectFilter, dir: s
       const stat = statSourceFile(file);
       if (!stat) continue;
       const current = indexed.get(file);
-      if (!current || !sameStat(current, stat)) indexSourceFile(rootId, file, stat);
+      if (!current || !sameStat(current, stat)) indexSourceFile(filter, file, stat);
       present.add(file);
     } catch (error) {
       if (!isPathMissing(error)) throw error;
@@ -62,11 +62,10 @@ export function reconcileDirectory(rootId: number, filter: ProjectFilter, dir: s
   }
 
   deleteFiles([...indexed.keys()].filter((file) => !present.has(file)));
-  return present.size;
 }
 
 /** Reconcile one exact file scope, including stale rows from a replaced directory. */
-export function reconcileFile(rootId: number, filter: ProjectFilter, file: string): boolean {
+export function reconcileFile(filter: SourceFilter, file: string): boolean {
   getParser();
   const indexed = getFileStatsInScope(file, true);
   const cachedPaths = [...indexed.keys()];
@@ -84,7 +83,7 @@ export function reconcileFile(rootId: number, filter: ProjectFilter, file: strin
       return false;
     }
     const current = indexed.get(file);
-    if (!current || !sameStat(current, stat)) indexSourceFile(rootId, file, stat);
+    if (!current || !sameStat(current, stat)) indexSourceFile(filter, file, stat);
     deleteFiles(descendants);
     return true;
   } catch (error) {
@@ -106,12 +105,12 @@ function statSourceFile(file: string): FileStat | null {
  * seen. Identical bytes under the same grammar at distinct indexed paths
  * share one content row.
  */
-function indexSourceFile(rootId: number, file: string, stat: FileStat): void {
+function indexSourceFile(filter: SourceFilter, file: string, stat: FileStat): void {
   const lang = getLanguageForFile(file);
   if (!lang) throw new Error(`unsupported source file: ${file}`);
   const source = fs.readFileSync(file, "utf-8");
   const hash = createHash("sha256").update(source).digest("hex");
-  replaceFile(rootId, file, stat, hash, lang.name, (contentId) => {
+  replaceFile(file, stat, hash, lang.name, filter.isEnvironmentPath(file), (contentId) => {
     const activeParser = getParser();
     activeParser.setLanguage(lang.language);
     const tree = activeParser.parse(source);
