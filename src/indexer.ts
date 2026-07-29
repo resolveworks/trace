@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
-import * as path from "node:path";
 import { Parser, type Node as SyntaxNode } from "web-tree-sitter";
+import { isPathMissing } from "./fs-errors.ts";
 import { getLanguageForFile, initializeLanguages, type LoadedLang } from "./languages.ts";
 import { ProjectFilter } from "./project-filter.ts";
+import { walkDirectories } from "./traverse.ts";
 import { contains } from "./config.ts";
 import {
   deleteFiles,
@@ -42,19 +43,23 @@ export interface IndexResult {
 
 export function indexRoot(rootId: number, filter: ProjectFilter, dir = filter.root): IndexResult {
   getParser();
-  const files = fs.existsSync(dir) ? collectFiles(dir, filter) : [];
+  const files = walkDirectories(filter, dir).flatMap((listing) => listing.files);
   const indexed = getIndexedFiles(rootId);
-  const present = new Set(files);
+  const present = new Set<string>();
   let changed = 0;
 
   for (const file of files) {
-    const stat = statFile(file);
-    if (!stat) continue;
-    const current = indexed.get(file);
-    if (current && sameStat(current, stat)) continue;
-
-    indexSourceFile(rootId, file, stat);
-    changed++;
+    try {
+      const stat = statFile(file);
+      const current = indexed.get(file);
+      if (!current || !sameStat(current, stat)) {
+        indexSourceFile(rootId, file, stat);
+        changed++;
+      }
+      present.add(file);
+    } catch (error) {
+      if (!isPathMissing(error)) throw error;
+    }
   }
 
   const missing: string[] = [];
@@ -63,34 +68,30 @@ export function indexRoot(rootId: number, filter: ProjectFilter, dir = filter.ro
   }
   deleteFiles(missing);
 
-  return { files: files.length, changed, removed: missing.length };
+  return { files: present.size, changed, removed: missing.length };
 }
 
 /** Reconcile one file after a watcher event. */
 export function reindexFile(rootId: number, file: string): void {
   getParser();
-  const stat = statFile(file);
-  if (!stat) {
-    deleteFiles([file]); // raced with a deletion
-    return;
+  try {
+    indexSourceFile(rootId, file, statFile(file));
+  } catch (error) {
+    if (!isPathMissing(error)) throw error;
+    deleteFiles([file]);
   }
-  indexSourceFile(rootId, file, stat);
 }
 
-/** Freshness hint from a stat, following symlinks to the underlying file. */
-function statFile(file: string): FileStat | null {
-  try {
-    const stats = fs.statSync(file, { bigint: true });
-    return { size: stats.size, mtimeNs: stats.mtimeNs };
-  } catch {
-    return null;
-  }
+/** Freshness hint from a stat. */
+function statFile(file: string): FileStat {
+  const stats = fs.statSync(file, { bigint: true });
+  return { size: stats.size, mtimeNs: stats.mtimeNs };
 }
 
 /**
  * Point a file at its content, parsing only when the content has never been
- * seen. Identical bytes under the same grammar — hardlinks, symlinks, plain
- * copies — share one content row.
+ * seen. Identical bytes under the same grammar at distinct indexed paths
+ * share one content row.
  */
 function indexSourceFile(rootId: number, file: string, stat: FileStat): void {
   const lang = getLanguageForFile(file);
@@ -183,40 +184,4 @@ function findEnclosingDef(
     }
   }
   return best;
-}
-
-function collectFiles(
-  dir: string,
-  filter: ProjectFilter,
-  visited = new Set<string>([fs.realpathSync(dir)]),
-): string[] {
-  const results: string[] = [];
-  const entries = fs
-    .readdirSync(dir, { withFileTypes: true })
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  for (const entry of entries) {
-    const file = path.join(dir, entry.name);
-    let isDirectory = entry.isDirectory();
-    let isFile = entry.isFile();
-    if (entry.isSymbolicLink()) {
-      try {
-        const stat = fs.statSync(file);
-        isDirectory = stat.isDirectory();
-        isFile = stat.isFile();
-      } catch {
-        continue;
-      }
-    }
-
-    if (isDirectory && filter.includesDirectory(file)) {
-      const realpath = fs.realpathSync(file);
-      if (visited.has(realpath)) continue;
-      visited.add(realpath);
-      results.push(...collectFiles(file, filter, visited));
-    } else if (isFile && filter.includesFile(file)) {
-      results.push(file);
-    }
-  }
-  return results;
 }

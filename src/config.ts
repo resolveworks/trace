@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { isPathMissing } from "./fs-errors.ts";
 
 interface TraceConfig {
   roots?: string[];
@@ -9,8 +10,14 @@ function readTraceConfig(environment: NodeJS.ProcessEnv): TraceConfig {
   const home = environment.HOME;
   if (!home) return {};
   const file = path.join(home, ".pi", "agent", "trace.json");
-  if (!fs.existsSync(file)) return {};
-  const config: unknown = JSON.parse(fs.readFileSync(file, "utf-8"));
+  let source: string;
+  try {
+    source = fs.readFileSync(file, "utf-8");
+  } catch (error) {
+    if (!isPathMissing(error)) throw error;
+    return {};
+  }
+  const config: unknown = JSON.parse(source);
   if (typeof config !== "object" || config === null || Array.isArray(config)) {
     throw new Error(`${file} must contain a JSON object`);
   }

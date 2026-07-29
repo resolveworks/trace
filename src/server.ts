@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
-import chokidar, { type FSWatcher } from "chokidar";
 import { Value } from "typebox/value";
 import { getTraceDbPath, getTraceRoots, getTraceSocketPath, contains } from "./config.ts";
+import { isPathMissing } from "./fs-errors.ts";
 import {
   closeDb,
   deleteFiles,
@@ -18,6 +18,7 @@ import {
 import { closeIndexer, indexRoot, initializeIndexer, reindexFile } from "./indexer.ts";
 import { closeLanguages } from "./languages.ts";
 import { ProjectFilter } from "./project-filter.ts";
+import { DirectoryWatcher } from "./watcher.ts";
 import {
   TraceRequestSchema,
   type TraceRequest,
@@ -29,16 +30,25 @@ interface IndexedRoot {
   id: number;
   path: string;
   filter: ProjectFilter;
+  watcher: DirectoryWatcher;
 }
 
 class RequestError extends Error {}
+
+/**
+ * Structural events (directory topology and .gitignore changes) are
+ * debounced per root so event storms like a package install collapse into
+ * one watch rebuild plus index reconciliation.
+ */
+const STRUCTURAL_DELAY_MS = 250;
 
 export class TraceServer {
   private readonly socketPath: string;
   private readonly databasePath: string;
   private readonly rootPaths: string[];
   private roots: IndexedRoot[] = [];
-  private watchers: FSWatcher[] = [];
+  private readonly rebuildTimers = new Map<string, NodeJS.Timeout>();
+  private closed = false;
   private server: net.Server | null = null;
 
   constructor(environment: NodeJS.ProcessEnv = process.env) {
@@ -54,17 +64,18 @@ export class TraceServer {
     openDb(this.databasePath);
 
     const rootIds = syncRoots(this.rootPaths);
-    this.roots = this.rootPaths.map((root) => ({
-      id: rootIds.get(root)!,
-      path: root,
-      filter: new ProjectFilter(root),
-    }));
+    this.roots = this.rootPaths.map((root) => this.createRoot(root, rootIds.get(root)!));
 
-    for (const root of this.roots) this.watchers.push(await this.watch(root));
+    // Watches go up before the initial scan: entries created during indexing
+    // are reported by their parent watchers and reconciled by event handling.
+    for (const root of this.roots) {
+      root.watcher.refresh();
+      this.log(`trace: ${root.path}: watching ${root.watcher.watchedDirectories()} directories`);
+    }
     for (const root of this.roots) {
       const result = indexRoot(root.id, root.filter);
-      process.stdout.write(
-        `trace: ${root.path}: ${result.files} files, ${result.changed} changed, ${result.removed} removed\n`,
+      this.log(
+        `trace: ${root.path}: ${result.files} files, ${result.changed} changed, ${result.removed} removed`,
       );
     }
 
@@ -80,8 +91,10 @@ export class TraceServer {
   }
 
   async close(): Promise<void> {
-    for (const watcher of this.watchers) await watcher.close();
-    this.watchers = [];
+    this.closed = true;
+    for (const timer of this.rebuildTimers.values()) clearTimeout(timer);
+    this.rebuildTimers.clear();
+    for (const root of this.roots) root.watcher.close();
     if (this.server) {
       await new Promise<void>((resolve, reject) =>
         this.server!.close((error) => (error ? reject(error) : resolve())),
@@ -93,27 +106,49 @@ export class TraceServer {
     closeLanguages();
   }
 
-  private async watch(root: IndexedRoot): Promise<FSWatcher> {
-    const watcher = chokidar.watch(root.path, {
-      ignoreInitial: true,
-      ignored: root.filter.watcherIgnored,
-    });
-    watcher.on("add", (file) => this.reconcile(root, file, false));
-    watcher.on("change", (file) => this.reconcile(root, file, false));
-    watcher.on("unlink", (file) => this.reconcile(root, file, true));
-    await new Promise<void>((resolve) => watcher.once("ready", resolve));
-    return watcher;
+  private log(message: string): void {
+    if (!this.closed) process.stdout.write(`${message}\n`);
   }
 
-  /** Watcher callbacks must never take down the daemon. */
-  private reconcile(root: IndexedRoot, file: string, removed: boolean): void {
-    const resolved = path.resolve(file);
-    try {
-      if (removed) deleteFiles([resolved]);
-      else reindexFile(root.id, resolved);
-    } catch (error) {
-      process.stdout.write(`trace: failed to reconcile ${resolved}: ${error}\n`);
-    }
+  private createRoot(rootPath: string, id: number): IndexedRoot {
+    const filter = new ProjectFilter(rootPath);
+    let root: IndexedRoot;
+    const watcher = new DirectoryWatcher(filter, {
+      onFileChanged: (file) => reindexFile(id, file),
+      onFileRemoved: (file) => deleteFiles([file]),
+      onStructural: (reason) => this.scheduleRebuild(root, reason),
+    });
+    root = { id, path: rootPath, filter, watcher };
+    return root;
+  }
+
+  private scheduleRebuild(root: IndexedRoot, reason: string): void {
+    if (this.closed) return;
+    const pending = this.rebuildTimers.get(root.path);
+    if (pending) clearTimeout(pending);
+    this.rebuildTimers.set(
+      root.path,
+      setTimeout(() => {
+        this.rebuildTimers.delete(root.path);
+        this.rebuildRoot(root, reason);
+      }, STRUCTURAL_DELAY_MS),
+    );
+  }
+
+  /**
+   * Full-root reconciliation: rebuild the directory watches and rescan the
+   * index. The replacement watches are established during the walk, before
+   * their children are scanned, so no final state is missed.
+   */
+  private rebuildRoot(root: IndexedRoot, reason: string): void {
+    if (this.closed) return;
+    root.watcher.refresh();
+    const result = indexRoot(root.id, root.filter);
+    this.log(
+      `trace: ${root.path}: reconciled after ${reason}: ` +
+        `${result.files} files, ${result.changed} changed, ${result.removed} removed, ` +
+        `${root.watcher.watchedDirectories()} directories watched`,
+    );
   }
 
   private accept(socket: net.Socket): void {
@@ -169,7 +204,8 @@ export class TraceServer {
     let stat: ReturnType<typeof fs.statSync>;
     try {
       stat = fs.statSync(scope);
-    } catch {
+    } catch (error) {
+      if (!isPathMissing(error)) throw error;
       throw new RequestError(`scope does not exist: ${requested}`);
     }
     const root = this.roots.find((candidate) => contains(candidate.path, scope));

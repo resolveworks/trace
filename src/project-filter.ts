@@ -1,14 +1,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { Stats } from "node:fs";
 import ignore from "ignore";
+import { isPathMissing } from "./fs-errors.ts";
 import { byExtension } from "./languages.ts";
 
 type Rules = ReturnType<typeof ignore>;
 
 export const ENV_DIRS: ReadonlySet<string> = new Set(["node_modules", ".venv"]);
 
-/** Shared source and .gitignore filter for the initial walk and Chokidar. */
+/** Shared source and .gitignore filter for the initial walk and the watcher. */
 export class ProjectFilter {
   readonly root: string;
   private readonly cache = new Map<string, Rules | null>();
@@ -29,18 +29,10 @@ export class ProjectFilter {
     return byExtension.has(path.extname(filePath).toLowerCase());
   }
 
-  readonly watcherIgnored = (filePath: string, stats?: Stats): boolean => {
-    if (!stats) return false;
-    // Chokidar passes lstat results: resolve symlinks to classify the target.
-    if (stats.isSymbolicLink()) {
-      try {
-        stats = fs.statSync(filePath);
-      } catch {
-        return true; // dangling symlink: nothing to watch
-      }
-    }
-    return stats.isDirectory() ? !this.includesDirectory(filePath) : !this.includesFile(filePath);
-  };
+  /** Drop cached .gitignore rules after a .gitignore creation, edit, or deletion. */
+  invalidate(): void {
+    this.cache.clear();
+  }
 
   private isIgnored(filePath: string, isDirectory: boolean): boolean {
     const absolute = path.resolve(this.root, filePath);
@@ -73,8 +65,13 @@ export class ProjectFilter {
   private addRules(directory: string, active: { directory: string; rules: Rules }[]): void {
     let rules = this.cache.get(directory);
     if (rules === undefined) {
-      const file = path.join(directory, ".gitignore");
-      rules = fs.existsSync(file) ? ignore().add(fs.readFileSync(file, "utf-8")) : null;
+      try {
+        const file = path.join(directory, ".gitignore");
+        rules = fs.lstatSync(file).isFile() ? ignore().add(fs.readFileSync(file, "utf-8")) : null;
+      } catch (error) {
+        if (!isPathMissing(error)) throw error;
+        rules = null;
+      }
       this.cache.set(directory, rules);
     }
     if (rules) active.push({ directory, rules });

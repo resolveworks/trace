@@ -17,9 +17,9 @@ Every tool uses Pi's current working directory when `path` is omitted. A relativ
 - the tree-sitter parsers and filesystem watchers, and
 - a Unix socket at `~/.pi/agent/extensions/trace/trace.sock`.
 
-The Pi extension is only an IPC client. It does not create an in-memory index, start the daemon, retry failed requests, or fall back to project-local behavior. A missing daemon, invalid scope, or invalid root configuration is an error. The database has no schema versioning: after a schema change, delete it and let the daemon rebuild on startup.
+The Pi extension is only an IPC client. It does not create an in-memory index, start the daemon, retry failed requests, or fall back to project-local behavior. A missing daemon, invalid scope, or invalid root configuration is an error. Watch installation, traversal, indexing, and database failures terminate the daemon rather than leave a partial state running. The database has no schema versioning: after a schema change, delete it and let the daemon rebuild on startup.
 
-Files and results use canonical absolute paths. Initial daemon startup hashes source files and only reparses changed content. Source changes are indexed by chokidar using the same nested `.gitignore` rules as the initial walk.
+Files and results use logical absolute paths. Initial daemon startup hashes source files and only reparses changed content. Source changes are picked up by a directory-only `fs.watch` watcher using the same nested `.gitignore` rules and logical directory-symlink traversal as the initial walk. File symlinks are not indexed because their target changes are not observable from the logical parent directory.
 
 Currently supported languages: TypeScript/TSX, Python, and Rust.
 
