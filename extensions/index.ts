@@ -90,7 +90,7 @@ export default function (pi: ExtensionAPI) {
       "Retrieve complete source bodies of named functions, classes, methods, types, interfaces, or enums from the system-wide trace index. Search is scoped to the supplied file or directory, or the current working directory by default. Returns absolute file paths and exact line ranges.",
     promptSnippet: "Get the full implementation of a named symbol",
     promptGuidelines: [
-      "Use def when you know a symbol name and need its implementation. Pass path to search another indexed file, directory, project, or dependency.",
+      "Use def when you know a symbol name and need its implementation. Pass path to search another source file, directory, project, or dependency.",
       'Query installed dependencies at their project-visible paths, e.g. def("get", ".venv/lib/python3.12/site-packages/httpx") or def("parse", "node_modules/typescript"). Project-scoped searches exclude dependency code unless the path points into it.',
     ],
     parameters: Type.Object({
@@ -150,7 +150,7 @@ export default function (pi: ExtensionAPI) {
       "Find syntactic call sites for a function or method in the system-wide trace index. Search is scoped to the supplied file or directory, or the current working directory by default. Returns absolute file paths, line numbers, and enclosing scopes. Does not resolve types, imports, aliases, or variable reassignments.",
     promptSnippet: "Find all invocations of a named function or method",
     promptGuidelines: [
-      "Use callers to find syntactic invocations of a symbol. Pass path to search another indexed file, directory, project, or dependency.",
+      "Use callers to find syntactic invocations of a symbol. Pass path to search another source file, directory, project, or dependency.",
       "Query installed dependencies at their project-visible paths, e.g. node_modules/<pkg> or .venv/lib/python3.x/site-packages/<pkg>. Project-scoped searches exclude dependency code unless the path points into it.",
     ],
     parameters: Type.Object({
@@ -205,9 +205,9 @@ export default function (pi: ExtensionAPI) {
     label: "Outline",
     description:
       "List symbols in a file or directory from the system-wide trace index. The path may be relative to the current working directory or absolute, and defaults to the current working directory. Nested members are indented under their parents.",
-    promptSnippet: "List the structure of an indexed file or directory",
+    promptSnippet: "List the structure of a source file or directory",
     promptGuidelines: [
-      "Use outline to map an unfamiliar indexed file or directory before choosing symbols for def or callers.",
+      "Use outline to map an unfamiliar source file or directory before choosing symbols for def or callers.",
     ],
     parameters: Type.Object({ path: pathParameter() }),
     renderCall(args, theme) {

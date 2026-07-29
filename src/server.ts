@@ -4,27 +4,10 @@ import * as path from "node:path";
 import { Value } from "typebox/value";
 import { getTraceDbPath, getTraceRoots, getTraceSocketPath, contains } from "./config.ts";
 import { isPathMissing } from "./fs-errors.ts";
-import {
-  closeDb,
-  deleteFiles,
-  findCallers,
-  findDefinition,
-  getOutline,
-  hasIndexedFileUnder,
-  isIndexedFile,
-  openDb,
-  syncRoots,
-} from "./db.ts";
-import {
-  closeIndexer,
-  indexRoot,
-  initializeIndexer,
-  reconcileFile,
-  reindexFile,
-} from "./indexer.ts";
+import { closeDb, findCallers, findDefinition, getOutline, openDb, syncRoots } from "./db.ts";
+import { closeIndexer, initializeIndexer, reconcileDirectory, reconcileFile } from "./indexer.ts";
 import { closeLanguages } from "./languages.ts";
 import { ProjectFilter } from "./project-filter.ts";
-import { DirectoryWatcher } from "./watcher.ts";
 import {
   TraceRequestSchema,
   type TraceRequest,
@@ -32,29 +15,21 @@ import {
   type TraceResult,
 } from "./protocol.ts";
 
-interface IndexedRoot {
+interface RootContext {
   id: number;
   path: string;
   filter: ProjectFilter;
-  watcher: DirectoryWatcher;
 }
 
 class RequestError extends Error {}
-
-/**
- * First-party directory topology and .gitignore events are debounced per
- * root so event storms collapse into one watch rebuild plus reconciliation.
- */
-const STRUCTURAL_DELAY_MS = 250;
 
 export class TraceServer {
   private readonly socketPath: string;
   private readonly databasePath: string;
   private readonly rootPaths: string[];
-  private roots: IndexedRoot[] = [];
-  private readonly rebuildTimers = new Map<string, NodeJS.Timeout>();
-  private closed = false;
+  private roots: RootContext[] = [];
   private server: net.Server | null = null;
+  private readonly sockets = new Set<net.Socket>();
 
   constructor(environment: NodeJS.ProcessEnv = process.env) {
     this.socketPath = getTraceSocketPath(environment);
@@ -69,20 +44,11 @@ export class TraceServer {
     openDb(this.databasePath);
 
     const rootIds = syncRoots(this.rootPaths);
-    this.roots = this.rootPaths.map((root) => this.createRoot(root, rootIds.get(root)!));
-
-    // Watches go up before the initial scan: entries created during indexing
-    // are reported by their parent watchers and reconciled by event handling.
-    for (const root of this.roots) {
-      root.watcher.refresh();
-      this.log(`trace: ${root.path}: watching ${root.watcher.watchedDirectories()} directories`);
-    }
-    for (const root of this.roots) {
-      const result = indexRoot(root.id, root.filter);
-      this.log(
-        `trace: ${root.path}: ${result.files} files, ${result.changed} changed, ${result.removed} removed`,
-      );
-    }
+    this.roots = this.rootPaths.map((root) => ({
+      id: rootIds.get(root)!,
+      path: root,
+      filter: new ProjectFilter(root),
+    }));
 
     this.server = net.createServer((socket) => this.accept(socket));
     await new Promise<void>((resolve, reject) => {
@@ -96,14 +62,12 @@ export class TraceServer {
   }
 
   async close(): Promise<void> {
-    this.closed = true;
-    for (const timer of this.rebuildTimers.values()) clearTimeout(timer);
-    this.rebuildTimers.clear();
-    for (const root of this.roots) root.watcher.close();
     if (this.server) {
-      await new Promise<void>((resolve, reject) =>
+      const closing = new Promise<void>((resolve, reject) =>
         this.server!.close((error) => (error ? reject(error) : resolve())),
       );
+      for (const socket of this.sockets) socket.destroy();
+      await closing;
       this.server = null;
     }
     closeDb();
@@ -111,52 +75,9 @@ export class TraceServer {
     closeLanguages();
   }
 
-  private log(message: string): void {
-    if (!this.closed) process.stdout.write(`${message}\n`);
-  }
-
-  private createRoot(rootPath: string, id: number): IndexedRoot {
-    const filter = new ProjectFilter(rootPath);
-    let root: IndexedRoot;
-    const watcher = new DirectoryWatcher(filter, {
-      onFileChanged: (file) => reindexFile(id, file),
-      onFileRemoved: (file) => deleteFiles([file]),
-      onStructural: (reason) => this.scheduleRebuild(root, reason),
-    });
-    root = { id, path: rootPath, filter, watcher };
-    return root;
-  }
-
-  private scheduleRebuild(root: IndexedRoot, reason: string): void {
-    if (this.closed) return;
-    const pending = this.rebuildTimers.get(root.path);
-    if (pending) clearTimeout(pending);
-    this.rebuildTimers.set(
-      root.path,
-      setTimeout(() => {
-        this.rebuildTimers.delete(root.path);
-        this.rebuildRoot(root, reason);
-      }, STRUCTURAL_DELAY_MS),
-    );
-  }
-
-  /**
-   * First-party root reconciliation: rebuild directory watches and rescan live
-   * source without sweeping dependency snapshots. Replacement watches are
-   * established before their children are scanned, so no final state is missed.
-   */
-  private rebuildRoot(root: IndexedRoot, reason: string): void {
-    if (this.closed) return;
-    root.watcher.refresh();
-    const result = indexRoot(root.id, root.filter, root.path, "watch");
-    this.log(
-      `trace: ${root.path}: reconciled after ${reason}: ` +
-        `${result.files} files, ${result.changed} changed, ${result.removed} removed, ` +
-        `${root.watcher.watchedDirectories()} directories watched`,
-    );
-  }
-
   private accept(socket: net.Socket): void {
+    this.sockets.add(socket);
+    socket.once("close", () => this.sockets.delete(socket));
     socket.setEncoding("utf-8");
     // Clients routinely vanish mid-request (timeouts, interrupts); never let a
     // connection error take down the daemon.
@@ -193,7 +114,7 @@ export class TraceServer {
   }
 
   private execute(request: TraceRequest): TraceResult {
-    const { scope, includeEnvironments } = this.resolveScope(request.scope);
+    const { scope, includeEnvironments } = this.reconcileScope(request.scope);
     switch (request.op) {
       case "def":
         return {
@@ -206,7 +127,7 @@ export class TraceServer {
     }
   }
 
-  private resolveScope(requested: string): {
+  private reconcileScope(requested: string): {
     scope: string;
     includeEnvironments: boolean;
   } {
@@ -227,19 +148,18 @@ export class TraceServer {
     const root = this.roots.find((candidate) => contains(candidate.path, scope));
     if (!root) {
       throw new RequestError(
-        `scope is outside indexed roots: ${scope} (roots: ${this.rootPaths.join(", ")})`,
+        `scope is outside configured roots: ${scope} (roots: ${this.rootPaths.join(", ")})`,
       );
     }
 
+    root.filter.invalidate();
     const includeEnvironments = root.filter.isEnvironmentPath(scope);
     if (isFile) {
-      if (includeEnvironments) reconcileFile(root.id, root.filter, scope);
-      if (!isIndexedFile(scope)) throw new RequestError(`file is not indexed: ${scope}`);
-    } else {
-      if (includeEnvironments) indexRoot(root.id, root.filter, scope);
-      if (scope !== root.path && !hasIndexedFileUnder(scope, includeEnvironments)) {
-        throw new RequestError(`directory is not indexed: ${scope}`);
+      if (!reconcileFile(root.id, root.filter, scope)) {
+        throw new RequestError(`file is not accepted source: ${scope}`);
       }
+    } else if (reconcileDirectory(root.id, root.filter, scope) === 0 && scope !== root.path) {
+      throw new RequestError(`directory contains no accepted source files: ${scope}`);
     }
     return { scope, includeEnvironments };
   }

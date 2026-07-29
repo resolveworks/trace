@@ -7,7 +7,6 @@ export interface LoadedLang {
   name: string;
   language: Language;
   query: Query;
-  extensions: string[];
 }
 
 interface LanguageConfig {
@@ -64,7 +63,7 @@ function readTags(specifiers: string[]): string {
   return combined.replace(/^.*#strip!.*\n?/gm, "").replace(/^.*#select-adjacent!.*\n?/gm, "");
 }
 
-/** Initialize the WASM runtime and all configured grammars before indexing. */
+/** Initialize the WASM runtime and all configured grammars. */
 export function initializeLanguages(): Promise<void> {
   parserInitialization ??= Parser.init();
   languageInitialization ??= (async () => {
@@ -75,9 +74,8 @@ export function initializeLanguages(): Promise<void> {
         name: config.name,
         language,
         query: new Query(language, readTags(config.tags)),
-        extensions: config.exts,
       };
-      for (const extension of loaded.extensions) byExtension.set(extension, loaded);
+      for (const extension of config.exts) byExtension.set(extension, loaded);
     }
   })();
   return languageInitialization;

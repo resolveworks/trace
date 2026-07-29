@@ -12,21 +12,16 @@ Every tool uses Pi's current working directory when `path` is omitted. A relativ
 
 `traced` is a required per-user daemon. It owns:
 
-- one persistent SQLite database at `~/.pi/agent/extensions/trace/index.sqlite`,
-- one index namespace spanning all configured roots,
-- the tree-sitter parsers and filesystem watchers, and
+- one persistent SQLite cache at `~/.pi/agent/extensions/trace/index.sqlite`,
+- one namespace spanning all configured roots,
+- the tree-sitter parsers, and
 - a Unix socket at `~/.pi/agent/extensions/trace/trace.sock`.
 
-The Pi extension is only an IPC client. It does not create an in-memory index, start the daemon, retry failed requests, or fall back to project-local behavior. A missing daemon, invalid scope, or invalid root configuration is an error. Watch installation, traversal, indexing, and database failures terminate the daemon rather than leave a partial state running. The database has no schema versioning: after a schema change, delete it and let the daemon rebuild on startup.
+The Pi extension is only an IPC client. It does not create an in-memory index, start the daemon, retry failed requests, or fall back to project-local behavior. A missing daemon, invalid scope, invalid root configuration, traversal failure, indexing failure, or database failure is an error. The database has no schema versioning: after a schema change, delete it and let queries repopulate it.
 
-Files and results use logical absolute paths. Initial daemon startup indexes both first-party source and installed dependency environments, hashing changed files and sharing parsed content for identical bytes. File symlinks are not indexed because their target changes are not observable from the logical parent directory.
+The daemon does not scan roots at startup or watch the filesystem. Before every operation it invalidates cached ignore rules and reconciles exactly the requested file or directory, then queries SQLite. Each result is therefore fresh for its requested scope; cached rows elsewhere may be stale until that scope is queried. Unchanged files are skipped by stat and identical content at different paths shares one parsed content row.
 
-Freshness follows two policies:
-
-- First-party directories are recursively covered by one non-recursive `fs.watch` per included logical directory. Source file changes are reconciled eagerly; directory topology and nested `.gitignore` changes rebuild that root's topology and index.
-- `node_modules` and `.venv` are startup snapshots. They are indexed despite `.gitignore`, are not watched recursively, and are reconciled immediately before a query whose requested scope is inside that environment. A file query refreshes that file; a directory query refreshes exactly that logical subtree.
-
-A query racing an active package installation may observe an intermediate filesystem state. The next dependency-scoped query reconciles the selected scope again; package-manager completion detection and transactional environment snapshots are intentionally out of scope.
+Project scopes do not enter `node_modules` or `.venv` and do not delete dependency rows already in the cache. A request inside one of those environments reconciles that exact logical subtree despite `.gitignore`, so dependencies are indexed entirely on demand. A query racing a filesystem rewrite or package installation may observe an intermediate state; the next query reconciles the scope again.
 
 Currently supported languages: TypeScript/TSX, Python, and Rust.
 
@@ -40,7 +35,7 @@ The daemon reads `~/.pi/agent/trace.json`. Only `roots` is required:
 }
 ```
 
-Entries must be existing absolute directories containing first-party source. Duplicate or overlapping roots are rejected. Broad roots may contain multiple nested repositories; nested `.gitignore` files are honored. Installed `node_modules` and `.venv` environments beneath roots are discovered automatically—package-manager stores should not be configured as roots.
+Entries must be existing absolute directories containing first-party source. Duplicate or overlapping roots are rejected. Broad roots may contain multiple nested repositories; nested `.gitignore` files are honored when each scope is reconciled. Installed `node_modules` and `.venv` environments beneath roots are available when explicitly scoped—package-manager stores should not be configured as roots.
 
 The socket and database always live under `~/.pi/agent/extensions/trace/`. The environment variables `TRACE_PATH` (colon-separated, like `PATH`), `TRACE_SOCKET`, and `TRACE_DB` override all configuration for tests and development daemons.
 
@@ -60,7 +55,7 @@ systemctl --user daemon-reload
 systemctl --user enable --now traced.service
 ```
 
-Check startup and indexing directly:
+Check the service directly:
 
 ```sh
 systemctl --user status traced.service
@@ -104,10 +99,10 @@ relative path  → Pi cwd + path
 absolute path  → path
 ```
 
-A file scope matches exactly that indexed file. A directory scope matches indexed files beneath it. Scopes must exist, lie below exactly one configured root, and be indexed. Dependency scopes are reconciled before this indexed-scope check, so a newly installed package is available on its first scoped query. An indexed source file containing no symbols is valid and returns an empty result; an ignored or unsupported file is an error.
+A file scope reconciles and matches exactly that source file. A directory scope reconciles and matches supported files beneath it. Scopes must exist and lie below exactly one configured root. A directory other than the configured root must contain at least one accepted source file. A source file containing no symbols is valid and returns an empty result; an ignored, unsupported, or file-symlink scope is an error.
 
 Path filtering is lexical relative to the configured root. `.git`, `.pnpm`, and `.pnpm-store` routes are always excluded. A package physically stored under `.pnpm` is still indexed when reached through an accepted project-visible path such as `node_modules/pkg`. Directory symlinks retain their logical paths. `(device, inode)` identity prevents only cycles already on the current ancestor chain, so separate non-cyclic logical aliases to one target are independently indexed and queryable.
 
-Project-root queries omit definitions and calls under `node_modules` and `.venv`; a scope inside an environment includes them.
+Project queries omit definitions and calls under `node_modules` and `.venv`; a scope inside an environment includes and refreshes them.
 
 `callers` is intentionally syntactic. Tree-sitter does not resolve imports, aliases, variable reassignments, types, or dynamic dispatch. This trades semantic precision for deterministic operation on compiling, broken, and dependency source alike.

@@ -4,12 +4,10 @@ import { Parser, type Node as SyntaxNode } from "web-tree-sitter";
 import { isPathMissing } from "./fs-errors.ts";
 import { getLanguageForFile, initializeLanguages, type LoadedLang } from "./languages.ts";
 import { ProjectFilter } from "./project-filter.ts";
-import { walkDirectories, type TraversalMode } from "./traverse.ts";
-import { contains } from "./config.ts";
+import { walkSourceFiles } from "./traverse.ts";
 import {
   deleteFiles,
-  getIndexedFile,
-  getIndexedFiles,
+  getFileStatsInScope,
   insertCall,
   insertSymbol,
   replaceFile,
@@ -36,89 +34,63 @@ function getParser(): Parser {
   return parser;
 }
 
-export interface IndexResult {
-  files: number;
-  changed: number;
-  removed: number;
-}
-
-export function indexRoot(
-  rootId: number,
-  filter: ProjectFilter,
-  dir = filter.root,
-  traversalMode: TraversalMode = "index",
-): IndexResult {
+/** Reconcile one directory and remove stale rows within the same query domain. */
+export function reconcileDirectory(rootId: number, filter: ProjectFilter, dir: string): number {
   getParser();
   let files: string[];
   try {
-    files = walkDirectories(filter, dir, undefined, traversalMode).flatMap(
-      (listing) => listing.files,
-    );
+    files = walkSourceFiles(filter, dir);
   } catch (error) {
     if (dir === filter.root || !isPathMissing(error)) throw error;
     files = [];
   }
-  const indexed = getIndexedFiles(rootId);
+
+  const includeEnvironments = filter.isEnvironmentPath(dir);
+  const indexed = getFileStatsInScope(dir, includeEnvironments);
   const present = new Set<string>();
-  let changed = 0;
 
   for (const file of files) {
     try {
       const stat = statSourceFile(file);
       if (!stat) continue;
       const current = indexed.get(file);
-      if (!current || !sameStat(current, stat)) {
-        indexSourceFile(rootId, file, stat);
-        changed++;
-      }
+      if (!current || !sameStat(current, stat)) indexSourceFile(rootId, file, stat);
       present.add(file);
     } catch (error) {
       if (!isPathMissing(error)) throw error;
     }
   }
 
-  const missing: string[] = [];
-  for (const file of indexed.keys()) {
-    if (traversalMode === "watch" && filter.isEnvironmentPath(file)) continue;
-    if (contains(dir, file) && !present.has(file)) missing.push(file);
-  }
-  deleteFiles(missing);
-
-  return { files: present.size, changed, removed: missing.length };
+  deleteFiles([...indexed.keys()].filter((file) => !present.has(file)));
+  return present.size;
 }
 
-/** Reconcile one file after a watcher event. */
-export function reindexFile(rootId: number, file: string): void {
+/** Reconcile one exact file scope, including stale rows from a replaced directory. */
+export function reconcileFile(rootId: number, filter: ProjectFilter, file: string): boolean {
   getParser();
-  try {
-    const stat = statSourceFile(file);
-    if (stat) indexSourceFile(rootId, file, stat);
-    else deleteFiles([file]);
-  } catch (error) {
-    if (!isPathMissing(error)) throw error;
-    deleteFiles([file]);
-  }
-}
+  const indexed = getFileStatsInScope(file, true);
+  const cachedPaths = [...indexed.keys()];
+  const descendants = cachedPaths.filter((candidate) => candidate !== file);
 
-/** Stat-based reconciliation for an exact dependency query scope. */
-export function reconcileFile(rootId: number, filter: ProjectFilter, file: string): void {
-  getParser();
   if (!filter.includesFile(file)) {
-    deleteFiles([file]);
-    return;
+    deleteFiles(cachedPaths);
+    return false;
   }
 
   try {
     const stat = statSourceFile(file);
     if (!stat) {
-      deleteFiles([file]);
-      return;
+      deleteFiles(cachedPaths);
+      return false;
     }
-    const current = getIndexedFile(file);
+    const current = indexed.get(file);
     if (!current || !sameStat(current, stat)) indexSourceFile(rootId, file, stat);
+    deleteFiles(descendants);
+    return true;
   } catch (error) {
     if (!isPathMissing(error)) throw error;
-    deleteFiles([file]);
+    deleteFiles(cachedPaths);
+    return false;
   }
 }
 

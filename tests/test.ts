@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import type {
@@ -31,22 +32,6 @@ async function rejects(action: () => Promise<unknown>, pattern: RegExp, message:
   } catch (error) {
     assert(pattern.test(String(error)), message);
   }
-}
-
-async function eventually(action: () => Promise<boolean>, message: string): Promise<void> {
-  const deadline = Date.now() + 3_000;
-  while (Date.now() < deadline) {
-    try {
-      if (await action()) {
-        assert(true, message);
-        return;
-      }
-    } catch {
-      // Queries can fail while a filesystem event is still in flight.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  assert(false, message);
 }
 
 function write(root: string, file: string, content: string): string {
@@ -247,8 +232,8 @@ try {
 
   await rejects(
     () => executeTool("def", { name: "linkedSymbol", path: sourceSymlink }, rootA),
-    /file is not indexed/,
-    "file symlinks are not indexed without a watchable logical directory",
+    /file is not accepted source/,
+    "file symlinks are rejected",
   );
 
   const backlinkDefinition = await executeTool(
@@ -263,18 +248,19 @@ try {
   );
   await rejects(
     () => executeTool("outline", { path: storeBacklink }, rootB),
-    /directory is not indexed/,
-    ".pnpm-store logical routes are unindexed",
+    /directory contains no accepted source files/,
+    ".pnpm-store logical routes are rejected",
   );
   fs.writeFileSync(backlinkSource, "export function backlinkSymbol() {\n  return 2;\n}\n");
-  await eventually(async () => {
-    const result = await executeTool(
-      "def",
-      { name: "backlinkSymbol", path: projectBehindStoreBacklink },
-      rootB,
-    );
-    return resultText(result).includes(`in ${backlinkSource}:1-3`);
-  }, "the normal first-party path behind a store backlink remains watched");
+  const refreshedBacklink = await executeTool(
+    "def",
+    { name: "backlinkSymbol", path: projectBehindStoreBacklink },
+    rootB,
+  );
+  assert(
+    resultText(refreshedBacklink).includes(`in ${backlinkSource}:1-3`),
+    "the normal first-party path behind a store backlink remains queryable",
+  );
 
   const cycleDefinition = await executeTool(
     "def",
@@ -423,21 +409,20 @@ try {
     dependencyPhysical,
     "export function dependencyValue() {\n  const updated = 2;\n  return updated;\n}\n",
   );
-  await eventually(async () => {
-    const result = await executeTool(
-      "def",
-      { name: "dependencyValue", path: dependencyDirectory },
-      rootA,
-    );
-    return (
-      resultText(result).includes(`in ${dependencyLogical}:1-4`) &&
-      resultText(result).includes("   3 |   return updated;")
-    );
-  }, "a dependency-scoped query reconciles a deep dependency change");
+  const updatedDependency = await executeTool(
+    "def",
+    { name: "dependencyValue", path: dependencyDirectory },
+    rootA,
+  );
+  assert(
+    resultText(updatedDependency).includes(`in ${dependencyLogical}:1-4`) &&
+      resultText(updatedDependency).includes("   3 |   return updated;"),
+    "a dependency-scoped query reconciles a deep dependency change",
+  );
   await rejects(
     () => executeTool("def", { name: "dependencyValue", path: dependencyPhysical }, rootA),
-    /file is not indexed/,
-    "physical .pnpm package files remain unindexed",
+    /file is not accepted source/,
+    "physical .pnpm package files remain excluded",
   );
 
   const newlyInstalledDirectory = path.join(rootA, "node_modules", "new-package");
@@ -473,14 +458,15 @@ try {
   );
 
   fs.rmSync(path.dirname(dependencyPhysical), { recursive: true, force: true });
-  await eventually(async () => {
-    const result = await executeTool(
-      "def",
-      { name: "dependencyValue", path: path.join(rootA, "node_modules") },
-      rootA,
-    );
-    return resultText(result) === 'No definition found for "dependencyValue"';
-  }, "a dependency subtree query removes files deleted below that boundary");
+  const deletedDependency = await executeTool(
+    "def",
+    { name: "dependencyValue", path: path.join(rootA, "node_modules") },
+    rootA,
+  );
+  assert(
+    resultText(deletedDependency) === 'No definition found for "dependencyValue"',
+    "a dependency subtree query removes files deleted below that boundary",
+  );
 
   write(
     rootA,
@@ -495,147 +481,175 @@ try {
   const deepLogical = path.join(dependencyDirectory, "lib", "deep.js");
   fs.unlinkSync(dependencyDirectory);
   fs.symlinkSync(path.dirname(dependencyPhysical), dependencyDirectory, "dir");
-  await eventually(async () => {
-    const result = await executeTool(
-      "def",
-      { name: "restoredDependency", path: dependencyDirectory },
-      rootA,
-    );
-    return resultText(result).includes(`in ${dependencyLogical}:5`);
-  }, "querying a replaced dependency symlink refreshes its logical rows");
-  await eventually(async () => {
-    const result = await executeTool(
-      "def",
-      { name: "deepDependencySymbol", path: dependencyDirectory },
-      rootA,
-    );
-    return (
-      resultText(result).includes(`in ${deepLogical}:1`) &&
-      !resultText(result).includes(deepPhysical)
-    );
-  }, "a scoped query adds a new deep file through its logical path");
+  const restoredDependency = await executeTool(
+    "def",
+    { name: "restoredDependency", path: dependencyDirectory },
+    rootA,
+  );
+  assert(
+    resultText(restoredDependency).includes(`in ${dependencyLogical}:5`),
+    "querying a replaced dependency symlink refreshes its logical rows",
+  );
+  const addedDeepDependency = await executeTool(
+    "def",
+    { name: "deepDependencySymbol", path: dependencyDirectory },
+    rootA,
+  );
+  assert(
+    resultText(addedDeepDependency).includes(`in ${deepLogical}:1`) &&
+      !resultText(addedDeepDependency).includes(deepPhysical),
+    "a scoped query adds a new deep file through its logical path",
+  );
 
   fs.writeFileSync(
     dependencyPhysical,
     "export function dependencyValue() {\n  return 4;\n}\n\nexport function restoredDependency() {\n  return 8;\n}\n",
   );
-  await eventually(async () => {
-    const result = await executeTool(
-      "def",
-      { name: "restoredDependency", path: dependencyDirectory },
-      rootA,
-    );
-    return (
-      resultText(result).includes(`in ${dependencyLogical}:5-7`) &&
-      resultText(result).includes("   6 |   return 8;")
-    );
-  }, "a changed file at a replaced dependency symlink is reconciled on query");
+  const changedRestoredDependency = await executeTool(
+    "def",
+    { name: "restoredDependency", path: dependencyDirectory },
+    rootA,
+  );
+  assert(
+    resultText(changedRestoredDependency).includes(`in ${dependencyLogical}:5-7`) &&
+      resultText(changedRestoredDependency).includes("   6 |   return 8;"),
+    "a changed file at a replaced dependency symlink is reconciled on query",
+  );
 
   fs.writeFileSync(deepPhysical, "export function deepDependencySymbol() {\n  return 42;\n}\n");
-  await eventually(async () => {
-    const result = await executeTool(
-      "def",
-      { name: "deepDependencySymbol", path: deepLogical },
-      rootA,
-    );
-    return (
-      resultText(result).includes(`in ${deepLogical}:1-3`) &&
-      resultText(result).includes("   2 |   return 42;")
-    );
-  }, "an exact dependency file query reconciles without a recursive watch");
+  const changedDeepDependency = await executeTool(
+    "def",
+    { name: "deepDependencySymbol", path: deepLogical },
+    rootA,
+  );
+  assert(
+    resultText(changedDeepDependency).includes(`in ${deepLogical}:1-3`) &&
+      resultText(changedDeepDependency).includes("   2 |   return 42;"),
+    "an exact dependency file query reconciles only that file",
+  );
   await rejects(
     () => executeTool("def", { name: "deepDependencySymbol", path: deepPhysical }, rootA),
-    /file is not indexed/,
-    "deep physical .pnpm files remain unindexed",
+    /file is not accepted source/,
+    "deep physical .pnpm files remain excluded",
   );
 
   console.log("\nFilesystem lifecycle...");
   const changing = path.join(rootA, "changing.ts");
   fs.writeFileSync(changing, "export function addedSymbol() {}\n");
-  await eventually(async () => {
-    const result = await executeTool("def", { name: "addedSymbol" }, rootA);
-    return resultText(result).includes("function_declaration addedSymbol");
-  }, "watcher exposes an added symbol");
+  const addedSymbol = await executeTool("def", { name: "addedSymbol" }, rootA);
+  assert(
+    resultText(addedSymbol).includes("function_declaration addedSymbol"),
+    "a query exposes an added symbol",
+  );
 
   fs.writeFileSync(changing, "export function changedSymbol() {}\n");
-  await eventually(async () => {
-    const oldResult = await executeTool("def", { name: "addedSymbol" }, rootA);
-    const newResult = await executeTool("def", { name: "changedSymbol" }, rootA);
-    return (
-      resultText(oldResult) === 'No definition found for "addedSymbol"' &&
-      resultText(newResult).includes("function_declaration changedSymbol")
-    );
-  }, "watcher replaces changed symbols");
+  const removedAddedSymbol = await executeTool("def", { name: "addedSymbol" }, rootA);
+  const changedSymbol = await executeTool("def", { name: "changedSymbol" }, rootA);
+  assert(
+    resultText(removedAddedSymbol) === 'No definition found for "addedSymbol"' &&
+      resultText(changedSymbol).includes("function_declaration changedSymbol"),
+    "a query replaces changed symbols",
+  );
 
   fs.unlinkSync(changing);
-  await eventually(async () => {
-    const result = await executeTool("def", { name: "changedSymbol" }, rootA);
-    return resultText(result) === 'No definition found for "changedSymbol"';
-  }, "watcher removes deleted symbols");
+  const removedChangedSymbol = await executeTool("def", { name: "changedSymbol" }, rootA);
+  assert(
+    resultText(removedChangedSymbol) === 'No definition found for "changedSymbol"',
+    "a query removes deleted symbols",
+  );
+
+  const replacedScope = write(rootA, "replaced.ts", "export function formerFileSymbol() {}\n");
+  await executeTool("outline", { path: replacedScope }, rootA);
+  fs.unlinkSync(replacedScope);
+  write(replacedScope, "child.ts", "export function directoryChildSymbol() {}\n");
+  const replacementDirectoryOutline = await executeTool("outline", { path: replacedScope }, rootA);
+  assert(
+    resultText(replacementDirectoryOutline).includes("directoryChildSymbol") &&
+      !resultText(replacementDirectoryOutline).includes("formerFileSymbol"),
+    "replacing a file with a directory removes the exact file row",
+  );
+
+  fs.rmSync(replacedScope, { recursive: true });
+  fs.writeFileSync(replacedScope, "export function replacementFileSymbol() {}\n");
+  const replacementFileOutline = await executeTool("outline", { path: replacedScope }, rootA);
+  assert(
+    resultText(replacementFileOutline).includes("replacementFileSymbol") &&
+      !resultText(replacementFileOutline).includes("directoryChildSymbol"),
+    "replacing a directory with a file removes descendant rows",
+  );
 
   console.log("\nDirectory topology...");
   const created = path.join(rootA, "created");
   fs.mkdirSync(path.join(created, "inner"), { recursive: true });
   fs.writeFileSync(path.join(created, "fresh.ts"), "export function freshSymbol() {}\n");
   fs.writeFileSync(path.join(created, "inner", "inner.ts"), "export function innerSymbol() {}\n");
-  await eventually(async () => {
-    const result = await executeTool("def", { name: "freshSymbol" }, rootA);
-    return resultText(result).includes("function_declaration freshSymbol");
-  }, "a new directory already containing a source file is indexed");
-  await eventually(async () => {
-    const result = await executeTool("def", { name: "innerSymbol" }, rootA);
-    return resultText(result).includes("function_declaration innerSymbol");
-  }, "a nested file inside a newly created directory tree is indexed");
+  const freshSymbol = await executeTool("def", { name: "freshSymbol" }, rootA);
+  assert(
+    resultText(freshSymbol).includes("function_declaration freshSymbol"),
+    "a new directory already containing a source file is indexed",
+  );
+  const innerSymbol = await executeTool("def", { name: "innerSymbol" }, rootA);
+  assert(
+    resultText(innerSymbol).includes("function_declaration innerSymbol"),
+    "a nested file inside a newly created directory tree is indexed",
+  );
 
   const nestedFile = path.join(rootA, "nested", "deep", "nested.ts");
   fs.writeFileSync(nestedFile, "export function nestedSymbol() {}\n");
-  await eventually(async () => {
-    const result = await executeTool("def", { name: "nestedSymbol" }, rootA);
-    return resultText(result).includes("function_declaration nestedSymbol");
-  }, "a file added in a watched nested directory is indexed");
+  const nestedSymbol = await executeTool("def", { name: "nestedSymbol" }, rootA);
+  assert(
+    resultText(nestedSymbol).includes("function_declaration nestedSymbol"),
+    "a file added in a nested directory is indexed",
+  );
   fs.writeFileSync(nestedFile, "export function renamedNestedSymbol() {}\n");
-  await eventually(async () => {
-    const oldResult = await executeTool("def", { name: "nestedSymbol" }, rootA);
-    const newResult = await executeTool("def", { name: "renamedNestedSymbol" }, rootA);
-    return (
-      resultText(oldResult) === 'No definition found for "nestedSymbol"' &&
-      resultText(newResult).includes("function_declaration renamedNestedSymbol")
-    );
-  }, "a change in a watched nested directory is reindexed");
+  const removedNestedSymbol = await executeTool("def", { name: "nestedSymbol" }, rootA);
+  const renamedNestedSymbol = await executeTool("def", { name: "renamedNestedSymbol" }, rootA);
+  assert(
+    resultText(removedNestedSymbol) === 'No definition found for "nestedSymbol"' &&
+      resultText(renamedNestedSymbol).includes("function_declaration renamedNestedSymbol"),
+    "a change in a nested directory is reconciled",
+  );
   fs.unlinkSync(nestedFile);
-  await eventually(async () => {
-    const result = await executeTool("def", { name: "renamedNestedSymbol" }, rootA);
-    return resultText(result) === 'No definition found for "renamedNestedSymbol"';
-  }, "a deletion in a watched nested directory is removed");
+  const removedRenamedNestedSymbol = await executeTool(
+    "def",
+    { name: "renamedNestedSymbol" },
+    rootA,
+  );
+  assert(
+    resultText(removedRenamedNestedSymbol) === 'No definition found for "renamedNestedSymbol"',
+    "a deletion in a nested directory is removed",
+  );
 
   fs.rmSync(created, { recursive: true, force: true });
-  await eventually(async () => {
-    const fresh = await executeTool("def", { name: "freshSymbol" }, rootA);
-    const inner = await executeTool("def", { name: "innerSymbol" }, rootA);
-    return (
-      resultText(fresh) === 'No definition found for "freshSymbol"' &&
-      resultText(inner) === 'No definition found for "innerSymbol"'
-    );
-  }, "deleting a populated directory removes all of its indexed files");
+  const removedFreshSymbol = await executeTool("def", { name: "freshSymbol" }, rootA);
+  const removedInnerSymbol = await executeTool("def", { name: "innerSymbol" }, rootA);
+  assert(
+    resultText(removedFreshSymbol) === 'No definition found for "freshSymbol"' &&
+      resultText(removedInnerSymbol) === 'No definition found for "innerSymbol"',
+    "deleting a populated directory removes all of its indexed files",
+  );
 
   const staging = path.join(home, "staging");
   write(staging, "incoming/pack/moved.ts", "export function movedSymbol() {}\n");
   const movedFile = path.join(rootA, "incoming", "pack", "moved.ts");
   fs.renameSync(path.join(staging, "incoming"), path.join(rootA, "incoming"));
-  await eventually(async () => {
-    const result = await executeTool("def", { name: "movedSymbol" }, rootA);
-    return resultText(result).includes(`function_declaration movedSymbol in ${movedFile}:1`);
-  }, "a populated directory moved into the root is indexed");
+  const movedSymbol = await executeTool("def", { name: "movedSymbol" }, rootA);
+  assert(
+    resultText(movedSymbol).includes(`function_declaration movedSymbol in ${movedFile}:1`),
+    "a populated directory moved into the root is indexed",
+  );
   fs.writeFileSync(movedFile, "export function movedSymbol() {\n  return 7;\n}\n");
-  await eventually(async () => {
-    const result = await executeTool("def", { name: "movedSymbol" }, rootA);
-    return resultText(result).includes(`in ${movedFile}:1-3`);
-  }, "changes inside a moved-in directory are watched");
+  const changedMovedSymbol = await executeTool("def", { name: "movedSymbol" }, rootA);
+  assert(
+    resultText(changedMovedSymbol).includes(`in ${movedFile}:1-3`),
+    "changes inside a moved-in directory are reconciled",
+  );
   fs.renameSync(path.join(rootA, "incoming"), path.join(staging, "departed"));
-  await eventually(async () => {
-    const result = await executeTool("def", { name: "movedSymbol" }, rootA);
-    return resultText(result) === 'No definition found for "movedSymbol"';
-  }, "moving a populated directory out of the root removes its indexed files");
+  const removedMovedSymbol = await executeTool("def", { name: "movedSymbol" }, rootA);
+  assert(
+    resultText(removedMovedSymbol) === 'No definition found for "movedSymbol"',
+    "moving a populated directory out of the root removes its indexed files",
+  );
 
   console.log("\nScope and failure contract...");
   const emptyOutline = await executeTool("outline", { path: empty }, rootA);
@@ -645,45 +659,49 @@ try {
   );
   await rejects(
     () => executeTool("outline", { path: ignored }, rootA),
-    /file is not indexed/,
-    "a gitignored file is unindexed",
+    /file is not accepted source/,
+    "a gitignored file is rejected",
   );
   await rejects(
     () => executeTool("outline", { path: home }, rootA),
-    new RegExp(`outside indexed roots:.*roots: ${rootA}, ${rootB}`),
-    "an outside-roots error lists the indexed roots",
+    new RegExp(`outside configured roots:.*roots: ${rootA}, ${rootB}`),
+    "an outside-roots error lists the configured roots",
   );
 
   console.log("\n.gitignore lifecycle...");
   const gitignore = path.join(rootA, ".gitignore");
   const originalGitignore = fs.readFileSync(gitignore, "utf-8");
   fs.writeFileSync(gitignore, `${originalGitignore}empty.ts\n`);
-  await eventually(async () => {
-    try {
-      await executeTool("outline", { path: empty }, rootA);
-      return false;
-    } catch (error) {
-      return /file is not indexed/.test(String(error));
-    }
-  }, "a newly gitignored file disappears from the index");
+  await rejects(
+    () => executeTool("outline", { path: empty }, rootA),
+    /file is not accepted source/,
+    "a newly gitignored file disappears from the index",
+  );
 
   fs.writeFileSync(gitignore, originalGitignore.replace("ignored.ts\n", ""));
-  await eventually(async () => {
-    const result = await executeTool("def", { name: "ignoredSymbol" }, rootA);
-    return resultText(result).includes("function_declaration ignoredSymbol");
-  }, "a newly unignored file appears in the index");
-  await eventually(async () => {
-    const result = await executeTool("outline", { path: empty }, rootA);
-    return resultText(result) === `No symbols found in "${empty}"`;
-  }, "removing the ignore rule restores the previously ignored file");
+  const unignoredSymbol = await executeTool("def", { name: "ignoredSymbol" }, rootA);
+  assert(
+    resultText(unignoredSymbol).includes("function_declaration ignoredSymbol"),
+    "a newly unignored file appears in the index",
+  );
+  const restoredEmptyOutline = await executeTool("outline", { path: empty }, rootA);
+  assert(
+    resultText(restoredEmptyOutline) === `No symbols found in "${empty}"`,
+    "removing the ignore rule restores the previously ignored file",
+  );
 
   fs.writeFileSync(gitignore, originalGitignore);
-  await eventually(async () => {
-    const result = await executeTool("def", { name: "ignoredSymbol" }, rootA);
-    return resultText(result) === 'No definition found for "ignoredSymbol"';
-  }, "restoring the .gitignore re-ignores its files");
+  const reignoredSymbol = await executeTool("def", { name: "ignoredSymbol" }, rootA);
+  assert(
+    resultText(reignoredSymbol) === 'No definition found for "ignoredSymbol"',
+    "restoring the .gitignore re-ignores its files",
+  );
 
+  const stalledClient = net.createConnection(socket);
+  await once(stalledClient, "connect");
+  const shutdownStarted = Date.now();
   await stopDaemon(daemon);
+  assert(Date.now() - shutdownStarted < 2_500, "shutdown closes incomplete client connections");
   daemon = null;
   await rejects(
     () => executeTool("outline", {}, rootA),

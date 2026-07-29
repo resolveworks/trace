@@ -9,7 +9,7 @@ type Rules = ReturnType<typeof ignore>;
 export const ENV_DIRS: ReadonlySet<string> = new Set(["node_modules", ".venv"]);
 const EXCLUDED_DIRS: ReadonlySet<string> = new Set([".git", ".pnpm", ".pnpm-store"]);
 
-/** Central lexical path policy for indexing, queries, and watcher traversal. */
+/** Central lexical path policy for reconciliation and queries. */
 export class ProjectFilter {
   readonly root: string;
   private readonly cache = new Map<string, Rules | null>();
@@ -26,11 +26,6 @@ export class ProjectFilter {
     return !this.isIgnored(dirPath, true);
   }
 
-  /** Dependency environments are indexed but never recursively watched. */
-  mayWatchDirectory(dirPath: string): boolean {
-    return this.includesDirectory(dirPath) && !this.isEnvironmentPath(dirPath);
-  }
-
   isEnvironmentPath(filePath: string): boolean {
     return this.relativeParts(filePath)?.some((part) => ENV_DIRS.has(part)) ?? false;
   }
@@ -39,7 +34,7 @@ export class ProjectFilter {
     return byExtension.has(path.extname(filePath).toLowerCase());
   }
 
-  /** Drop cached .gitignore rules after a .gitignore creation, edit, or deletion. */
+  /** Drop cached .gitignore rules before reconciling a query scope. */
   invalidate(): void {
     this.cache.clear();
   }

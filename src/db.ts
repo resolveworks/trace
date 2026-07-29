@@ -56,6 +56,16 @@ export function sameStat(a: FileStat, b: FileStat): boolean {
 let db: DatabaseType | null = null;
 let statements: Statements | null = null;
 
+const IS_DESCENDANT = "f.path >= ? AND f.path < ?";
+const IN_SCOPE = `(f.path = ? OR (${IS_DESCENDANT}))`;
+const RELATIVE_FILE = "substr(f.path, length(r.path) + 2)";
+const EXCLUDE_ENVIRONMENTS = [...ENV_DIRS]
+  .flatMap((name) => [
+    `${RELATIVE_FILE} NOT GLOB '${name}/*'`,
+    `${RELATIVE_FILE} NOT GLOB '*/${name}/*'`,
+  ])
+  .join(" AND ");
+
 function requireDb(): DatabaseType {
   if (!db) throw new Error("trace database is not open");
   return db;
@@ -68,15 +78,15 @@ function requireStatements(): Statements {
 
 /** Hot-path statements, prepared once when the database opens. */
 interface Statements {
-  indexedFiles: Statement;
-  indexedFile: Statement;
+  cachedFileStatsUnder: Statement;
+  cachedFirstPartyFileStatsUnder: Statement;
+  cachedFileStat: Statement;
   fileContent: Statement;
   contentByHash: Statement;
   insertContent: Statement;
   upsertFile: Statement;
   deleteOrphans: Statement;
   deleteFile: Statement;
-  isIndexed: Statement;
   insertSymbol: Statement;
   updateParent: Statement;
   insertCall: Statement;
@@ -84,8 +94,14 @@ interface Statements {
 
 function prepareStatements(database: DatabaseType): Statements {
   return {
-    indexedFiles: database.prepare("SELECT path, size, mtime_ns FROM files WHERE root_id = ?"),
-    indexedFile: database.prepare("SELECT size, mtime_ns FROM files WHERE path = ?"),
+    cachedFileStatsUnder: database.prepare(
+      `SELECT f.path, f.size, f.mtime_ns FROM files f WHERE ${IS_DESCENDANT}`,
+    ),
+    cachedFirstPartyFileStatsUnder: database.prepare(
+      `SELECT f.path, f.size, f.mtime_ns FROM files f JOIN roots r ON r.id = f.root_id
+       WHERE ${IS_DESCENDANT}${environmentFilter(false)}`,
+    ),
+    cachedFileStat: database.prepare("SELECT size, mtime_ns FROM files WHERE path = ?"),
     fileContent: database.prepare("SELECT content_id FROM files WHERE path = ?"),
     contentByHash: database.prepare("SELECT id FROM contents WHERE hash = ? AND language = ?"),
     insertContent: database.prepare("INSERT INTO contents(hash, language) VALUES (?, ?)"),
@@ -98,7 +114,6 @@ function prepareStatements(database: DatabaseType): Statements {
       "DELETE FROM contents WHERE NOT EXISTS (SELECT 1 FROM files WHERE files.content_id = contents.id)",
     ),
     deleteFile: database.prepare("DELETE FROM files WHERE path = ?"),
-    isIndexed: database.prepare("SELECT 1 FROM files WHERE path = ?"),
     insertSymbol: database.prepare(
       "INSERT INTO symbols (content_id, name, kind, start_line, end_line, parent_id) VALUES (?, ?, ?, ?, ?, ?)",
     ),
@@ -205,20 +220,25 @@ export function syncRoots(paths: string[]): Map<string, number> {
   return sync();
 }
 
-export function getIndexedFiles(rootId: number): Map<string, FileStat> {
-  const rows = requireStatements().indexedFiles.safeIntegers(true).all(rootId) as {
+export function getFileStatsInScope(
+  scope: string,
+  includeEnvironments: boolean,
+): Map<string, FileStat> {
+  const statements = requireStatements();
+  const statement = includeEnvironments
+    ? statements.cachedFileStatsUnder
+    : statements.cachedFirstPartyFileStatsUnder;
+  const rows = statement.safeIntegers(true).all(...descendantRange(scope)) as {
     path: string;
     size: bigint;
     mtime_ns: bigint;
   }[];
-  return new Map(rows.map((row) => [row.path, { size: row.size, mtimeNs: row.mtime_ns }]));
-}
-
-export function getIndexedFile(file: string): FileStat | null {
-  const row = requireStatements().indexedFile.safeIntegers(true).get(file) as
+  const files = new Map(rows.map((row) => [row.path, { size: row.size, mtimeNs: row.mtime_ns }]));
+  const exact = statements.cachedFileStat.safeIntegers(true).get(scope) as
     | { size: bigint; mtime_ns: bigint }
     | undefined;
-  return row ? { size: row.size, mtimeNs: row.mtime_ns } : null;
+  if (exact) files.set(scope, { size: exact.size, mtimeNs: exact.mtime_ns });
+  return files;
 }
 
 export function replaceFile(
@@ -260,21 +280,6 @@ export function deleteFiles(files: string[]): void {
   })();
 }
 
-export function isIndexedFile(file: string): boolean {
-  return requireStatements().isIndexed.get(file) !== undefined;
-}
-
-export function hasIndexedFileUnder(directory: string, includeEnvironments = false): boolean {
-  return (
-    requireDb()
-      .prepare(
-        `SELECT 1 FROM files f JOIN roots r ON r.id = f.root_id
-         WHERE ${IS_DESCENDANT}${environmentFilter(includeEnvironments)} LIMIT 1`,
-      )
-      .get(directory, directory) !== undefined
-  );
-}
-
 export function insertSymbol(
   contentId: number,
   name: string,
@@ -308,24 +313,34 @@ export function insertCall(
   requireStatements().insertCall.run(contentId, callerId, calleeName, line, endLine);
 }
 
-const IS_DESCENDANT = "substr(f.path, 1, length(rtrim(?, '/') || '/')) = rtrim(?, '/') || '/'";
-const IN_SCOPE = `(f.path = ? OR ${IS_DESCENDANT})`;
-const RELATIVE_FILE = "substr(f.path, length(r.path) + 2)";
-const EXCLUDE_ENVIRONMENTS = [...ENV_DIRS]
-  .flatMap((name) => [
-    `${RELATIVE_FILE} NOT GLOB '${name}/*'`,
-    `${RELATIVE_FILE} NOT GLOB '*/${name}/*'`,
-  ])
-  .join(" AND ");
-
 function environmentFilter(includeEnvironments: boolean): string {
   return includeEnvironments ? "" : ` AND ${EXCLUDE_ENVIRONMENTS}`;
+}
+
+function descendantRange(scope: string): [string, string] {
+  const prefix = scope.endsWith("/") ? scope : `${scope}/`;
+  // "0" is the immediate ASCII successor to the trailing slash.
+  return [prefix, `${prefix.slice(0, -1)}0`];
+}
+
+function scopeParameters(scope: string): [string, string, string] {
+  return [scope, ...descendantRange(scope)];
+}
+
+function scopedFilesQuery(includeEnvironments: boolean): string {
+  const filter = environmentFilter(includeEnvironments);
+  return `
+    SELECT f.path, f.content_id FROM files f JOIN roots r ON r.id = f.root_id
+    WHERE f.path = ?${filter}
+    UNION ALL
+    SELECT f.path, f.content_id FROM files f JOIN roots r ON r.id = f.root_id
+    WHERE ${IS_DESCENDANT}${filter}`;
 }
 
 export function findDefinition(
   name: string,
   scope: string,
-  includeEnvironments = false,
+  includeEnvironments: boolean,
 ): Definition[] {
   const rows = requireDb()
     .prepare(
@@ -338,7 +353,7 @@ export function findDefinition(
        WHERE s.name = ? AND ${IN_SCOPE}${environmentFilter(includeEnvironments)}
        ORDER BY length(f.path), f.path, s.start_line`,
     )
-    .all(name, scope, scope, scope) as Record<string, unknown>[];
+    .all(name, ...scopeParameters(scope)) as Record<string, unknown>[];
   return rows.map((row) => ({
     id: row.id as number,
     name: row.name as string,
@@ -352,7 +367,7 @@ export function findDefinition(
   }));
 }
 
-export function findCallers(name: string, scope: string, includeEnvironments = false): CallSite[] {
+export function findCallers(name: string, scope: string, includeEnvironments: boolean): CallSite[] {
   const rows = requireDb()
     .prepare(
       `SELECT s.name AS caller_name, s.kind AS caller_kind, c.callee_name,
@@ -364,7 +379,7 @@ export function findCallers(name: string, scope: string, includeEnvironments = f
        WHERE c.callee_name = ? AND ${IN_SCOPE}${environmentFilter(includeEnvironments)}
        ORDER BY length(f.path), f.path, c.line`,
     )
-    .all(name, scope, scope, scope) as Record<string, unknown>[];
+    .all(name, ...scopeParameters(scope)) as Record<string, unknown>[];
   return rows.map((row) => ({
     caller_name: (row.caller_name as string | null) ?? null,
     caller_kind: (row.caller_kind as string | null) ?? null,
@@ -375,17 +390,16 @@ export function findCallers(name: string, scope: string, includeEnvironments = f
   }));
 }
 
-export function getOutline(scope: string, includeEnvironments = false): DirSymbol[] {
+export function getOutline(scope: string, includeEnvironments: boolean): DirSymbol[] {
   const rows = requireDb()
     .prepare(
-      `SELECT f.path AS file, s.id, s.name, s.kind, s.start_line, s.end_line, s.parent_id
-       FROM symbols s
-       JOIN files f ON f.content_id = s.content_id
-       JOIN roots r ON r.id = f.root_id
-       WHERE ${IN_SCOPE}${environmentFilter(includeEnvironments)}
+      `WITH f AS (${scopedFilesQuery(includeEnvironments)})
+       SELECT f.path AS file, s.id, s.name, s.kind, s.start_line, s.end_line, s.parent_id
+       FROM f
+       JOIN symbols s ON s.content_id = f.content_id
        ORDER BY f.path, s.start_line`,
     )
-    .all(scope, scope, scope) as Record<string, unknown>[];
+    .all(...scopeParameters(scope)) as Record<string, unknown>[];
   return rows.map((row) => ({
     file: row.file as string,
     id: row.id as number,
