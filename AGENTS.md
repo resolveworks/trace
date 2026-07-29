@@ -29,7 +29,7 @@ Use `pnpm format` to apply formatting. Run typecheck, tests, and the formatting 
 
 - Keep `callers` syntactic. Do not introduce type analysis, import resolution, alias resolution, or other semantic indexing.
 - Preserve logical paths throughout filtering, caching, and results. Do not replace them with resolved physical paths.
-- Directory symlinks are traversed, with physical identity used only to stop cycles on the current traversal branch. Independent logical aliases remain independently queryable.
+- File symlinks to regular files are indexed at their logical paths. Directory symlinks are traversed, with physical identity used only to stop cycles on the current traversal branch. Independent logical aliases remain independently queryable.
 - Project scopes must not enter `node_modules` or `.venv`; those environments are indexed only when explicitly scoped. Logical routes containing `.git`, `.pnpm`, or `.pnpm-store` are always excluded.
 - Cache files by logical path and share parsed content by content hash and language. File stats are only a freshness hint for skipping unchanged files.
 - Treat only `ENOENT` and `ENOTDIR` reconciliation races as absence. Propagate other traversal, parsing, and database failures.

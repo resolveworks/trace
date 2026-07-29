@@ -38,13 +38,15 @@ export function walkSourceFiles(filter: SourceFilter, dir: string): string[] {
 
       for (const entry of entries) {
         const candidate = path.join(current, entry.name);
-        let directoryStats: fs.BigIntStats | null = null;
+        let targetStats: fs.BigIntStats | null = null;
         let isDirectory = entry.isDirectory();
+        let isFile = entry.isFile();
 
         if (entry.isSymbolicLink()) {
           try {
-            directoryStats = fs.statSync(candidate, { bigint: true });
-            isDirectory = directoryStats.isDirectory();
+            targetStats = fs.statSync(candidate, { bigint: true });
+            isDirectory = targetStats.isDirectory();
+            isFile = targetStats.isFile();
           } catch (error) {
             if (isPathMissing(error)) continue;
             throw error;
@@ -53,12 +55,12 @@ export function walkSourceFiles(filter: SourceFilter, dir: string): string[] {
 
         if (isDirectory && mayEnter(filter, candidate, includeEnvironments)) {
           try {
-            directoryStats ??= fs.statSync(candidate, { bigint: true });
-            if (directoryStats.isDirectory()) visit(candidate, directoryStats);
+            targetStats ??= fs.statSync(candidate, { bigint: true });
+            if (targetStats.isDirectory()) visit(candidate, targetStats);
           } catch (error) {
             if (!isPathMissing(error)) throw error;
           }
-        } else if (entry.isFile() && filter.includesFile(candidate)) {
+        } else if (isFile && filter.includesFile(candidate)) {
           files.push(candidate);
         }
       }

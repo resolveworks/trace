@@ -68,7 +68,7 @@ There is no daemon, configured source root, or startup scan. Any supported sourc
 - Logical routes containing `.git`, `.pnpm`, or `.pnpm-store` are excluded.
 - Project scopes do not enter `node_modules` or `.venv`.
 - A scope inside `node_modules` or `.venv` indexes that dependency subtree despite `.gitignore`.
-- Directory symlinks retain their logical paths, and separate aliases remain independently queryable.
+- File and directory symlinks retain their logical paths, and separate aliases remain independently queryable.
 
 Empty directories and supported source files without definitions are valid and return no results. Missing paths, unsupported file scopes, and ignored file scopes are errors.
 

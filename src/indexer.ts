@@ -94,9 +94,9 @@ export function reconcileFile(filter: SourceFilter, file: string): boolean {
   }
 }
 
-/** Freshness hint for a regular, non-symlink source file. */
+/** Freshness hint for a source file, following symlinks to their targets. */
 function statSourceFile(file: string): FileStat | null {
-  const stats = fs.lstatSync(file, { bigint: true });
+  const stats = fs.statSync(file, { bigint: true });
   if (!stats.isFile()) return null;
   return { size: stats.size, mtimeNs: stats.mtimeNs };
 }

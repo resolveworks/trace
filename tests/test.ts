@@ -276,10 +276,24 @@ try {
     "def uses cwd scope and returns the complete body",
   );
 
-  await rejects(
-    () => executeTool("def", { name: "linkedSymbol", path: sourceSymlink }, projectA),
-    /file is not accepted source/,
-    "file symlinks are rejected",
+  const linkedDefinition = await executeTool(
+    "def",
+    { name: "linkedSymbol", path: sourceSymlink },
+    projectA,
+  );
+  assert(
+    resultText(linkedDefinition).includes(
+      `function_declaration linkedSymbol in ${sourceSymlink}:1`,
+    ) && !resultText(linkedDefinition).includes(linkedSource),
+    "a file symlink scope is indexed through its logical path",
+  );
+
+  const directoryLinkedDefinition = await executeTool("def", { name: "linkedSymbol" }, projectA);
+  assert(
+    resultText(directoryLinkedDefinition).includes(
+      `function_declaration linkedSymbol in ${sourceSymlink}:1`,
+    ) && !resultText(directoryLinkedDefinition).includes(linkedSource),
+    "directory reconciliation includes file symlinks",
   );
 
   const backlinkDefinition = await executeTool(
@@ -552,6 +566,18 @@ try {
   );
 
   console.log("\nFilesystem lifecycle...");
+  fs.writeFileSync(linkedSource, "export function linkedSymbol() {\n  return 2;\n}\n");
+  const refreshedLinkedDefinition = await executeTool(
+    "def",
+    { name: "linkedSymbol", path: sourceSymlink },
+    projectA,
+  );
+  assert(
+    resultText(refreshedLinkedDefinition).includes(`in ${sourceSymlink}:1-3`) &&
+      resultText(refreshedLinkedDefinition).includes("   2 |   return 2;"),
+    "a file symlink scope reconciles changes to its target",
+  );
+
   const replacedScope = write(projectA, "replaced.ts", "export function formerFileSymbol() {}\n");
   await executeTool("outline", { path: replacedScope }, projectA);
   fs.unlinkSync(replacedScope);
