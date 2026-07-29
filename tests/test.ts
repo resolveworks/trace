@@ -1,5 +1,3 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { once } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -9,7 +7,7 @@ import type {
   ExtensionContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import traceExtension from "../extensions/index.ts";
+import { registerTrace } from "../extensions/index.ts";
 
 let passed = 0;
 let failed = 0;
@@ -40,12 +38,35 @@ function write(base: string, file: string, content: string): string {
   return target;
 }
 
+type LifecycleHandler = (event: unknown, ctx: ExtensionContext) => unknown | Promise<unknown>;
+
+const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "trace-test-"));
+const home = path.join(temporary, "home");
+const projectA = path.join(home, "workspace", "project-a");
+const projectB = path.join(home, "workspace", "project-b");
+const database = path.join(temporary, "index.sqlite");
+
 const tools = new Map<string, ToolDefinition>();
-traceExtension({
-  registerTool(tool: ToolDefinition) {
-    tools.set(tool.name, tool);
-  },
-} as unknown as ExtensionAPI);
+const lifecycleHandlers = new Map<string, LifecycleHandler[]>();
+registerTrace(
+  {
+    registerTool(tool: ToolDefinition) {
+      tools.set(tool.name, tool);
+    },
+    on(event: string, handler: LifecycleHandler) {
+      const handlers = lifecycleHandlers.get(event) ?? [];
+      handlers.push(handler);
+      lifecycleHandlers.set(event, handlers);
+    },
+  } as unknown as ExtensionAPI,
+  database,
+);
+
+async function emitLifecycle(event: string, cwd: string): Promise<void> {
+  for (const handler of lifecycleHandlers.get(event) ?? []) {
+    await handler({}, { cwd } as ExtensionContext);
+  }
+}
 
 async function executeTool(
   name: string,
@@ -65,51 +86,6 @@ function resultText(result: AgentToolResult<unknown>): string {
     .filter(Boolean)
     .join("\n");
 }
-
-let daemonLog = "";
-
-async function startDaemon(socket: string): Promise<ChildProcessWithoutNullStreams> {
-  const daemon = spawn(process.execPath, [path.resolve("src/daemon.ts")], {
-    env: process.env,
-    stdio: "pipe",
-  });
-  daemon.stdout.setEncoding("utf-8");
-  daemon.stderr.setEncoding("utf-8");
-  daemon.stdout.on("data", (chunk: string) => (daemonLog += chunk));
-  daemon.stderr.on("data", (chunk: string) => (daemonLog += chunk));
-
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    if (fs.existsSync(socket)) return daemon;
-    if (daemon.exitCode !== null || daemon.signalCode !== null) {
-      throw new Error(`daemon exited during startup:\n${daemonLog}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  daemon.kill("SIGKILL");
-  throw new Error(`daemon did not start:\n${daemonLog}`);
-}
-
-async function stopDaemon(daemon: ChildProcessWithoutNullStreams): Promise<void> {
-  if (daemon.exitCode !== null || daemon.signalCode !== null) return;
-  const exited = once(daemon, "exit");
-  daemon.kill("SIGTERM");
-  const force = setTimeout(() => daemon.kill("SIGKILL"), 3_000);
-  await exited;
-  clearTimeout(force);
-}
-
-const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "trace-test-"));
-const home = path.join(temporary, "home");
-const projectA = path.join(home, "workspace", "project-a");
-const projectB = path.join(home, "workspace", "project-b");
-const stateDirectory = path.join(home, ".pi", "agent", "extensions", "trace");
-const socket = path.join(stateDirectory, "trace.sock");
-const originalEnvironment = {
-  HOME: process.env.HOME,
-  TRACE_DB: process.env.TRACE_DB,
-  TRACE_SOCKET: process.env.TRACE_SOCKET,
-};
 
 fs.mkdirSync(projectA, { recursive: true });
 fs.mkdirSync(projectB, { recursive: true });
@@ -268,15 +244,10 @@ const externalSource = write(
 );
 const emptyDirectory = path.join(temporary, "elsewhere/empty");
 fs.mkdirSync(emptyDirectory, { recursive: true });
-fs.mkdirSync(stateDirectory, { recursive: true });
-
-process.env.HOME = home;
-delete process.env.TRACE_DB;
-delete process.env.TRACE_SOCKET;
-
-let daemon: ChildProcessWithoutNullStreams | null = null;
+let sessionStarted = false;
 try {
-  daemon = await startDaemon(socket);
+  await emitLifecycle("session_start", projectA);
+  sessionStarted = true;
 
   console.log("Core tool contract...");
   const definition = await executeTool("def", { name: "target" }, projectA);
@@ -640,20 +611,8 @@ try {
     resultText(reignoredSymbol) === 'No definition found for "ignoredSymbol"',
     "restoring the .gitignore re-ignores its files",
   );
-
-  await stopDaemon(daemon);
-  daemon = null;
-  await rejects(
-    () => executeTool("outline", {}, projectA),
-    /ENOENT|ECONNREFUSED/,
-    "daemon unavailability is a hard error",
-  );
 } finally {
-  if (daemon) await stopDaemon(daemon);
-  for (const [name, value] of Object.entries(originalEnvironment)) {
-    if (value === undefined) delete process.env[name];
-    else process.env[name] = value;
-  }
+  if (sessionStarted) await emitLifecycle("session_shutdown", projectA);
   fs.rmSync(temporary, { recursive: true, force: true });
 }
 

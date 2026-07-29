@@ -1,53 +1,24 @@
 # trace
 
-Deterministic, system-wide code navigation for [Pi](https://pi.dev). A persistent daemon uses tree-sitter and SQLite to answer common exploration questions without chains of `rg` and `read`.
+Deterministic, system-wide code navigation for [Pi](https://pi.dev). The extension uses tree-sitter and SQLite to answer common exploration questions without chains of `rg` and `read`.
 
 - **`def(name, path?)`** — return complete named source definitions.
 - **`callers(name, path?)`** — find syntactic call sites for a symbol.
 - **`outline(path?)`** — list symbols in a file or directory, including nested members.
 
-Every tool uses Pi's current working directory when `path` is omitted. A relative path resolves from that directory, and an absolute path can target any readable file or directory. There is no global unscoped symbol search.
+Every search has an explicit file or directory scope. The scope defaults to Pi's current working directory, a relative path resolves from that directory, and an absolute path can target any readable file or directory.
 
 ## Architecture
 
-`traced` is a required per-user daemon. It owns:
+The Pi extension opens a persistent SQLite cache at `~/.pi/agent/extensions/trace/index.sqlite` and initializes tree-sitter when the session starts. It closes the database connection and parser resources when the session shuts down.
 
-- one persistent SQLite cache at `~/.pi/agent/extensions/trace/index.sqlite`,
-- one namespace spanning all queried paths,
-- the tree-sitter parsers, and
-- a Unix socket at `~/.pi/agent/extensions/trace/trace.sock`.
+Every operation invalidates cached ignore rules, reconciles exactly the requested file or directory, and then queries SQLite. Each result is therefore fresh for its requested scope; cached rows elsewhere may be stale until that scope is queried. Unchanged files are skipped by stat and identical content at different paths shares one parsed content row.
 
-The Pi extension is only an IPC client. It does not create an in-memory index, start the daemon, retry failed requests, or fall back to project-local behavior. A missing daemon, invalid scope, traversal failure, indexing failure, or database failure is an error. The database is a disposable, versioned cache. A schema or extraction-contract version mismatch deletes it and lets queries repopulate it; cached index data is never migrated.
+An invalid scope, traversal failure, indexing failure, or database failure is an error. The database is a disposable, versioned cache; a schema or extraction-contract version mismatch replaces it and lets queries repopulate it.
 
-The daemon does not scan the filesystem at startup or watch it. Before every operation it invalidates cached ignore rules and reconciles exactly the requested file or directory, then queries SQLite. Each result is therefore fresh for its requested scope; cached rows elsewhere may be stale until that scope is queried. Unchanged files are skipped by stat and identical content at different paths shares one parsed content row.
-
-Scopes outside dependency environments do not enter `node_modules` or `.venv` and do not delete dependency rows already in the cache. A request inside one of those environments reconciles that exact logical subtree despite `.gitignore`, so dependencies are indexed entirely on demand. A query racing a filesystem rewrite or package installation may observe an intermediate state; the next query reconciles the scope again.
+Project scopes reconcile first-party source while preserving cached dependency rows. A request inside `node_modules` or `.venv` reconciles that exact logical subtree despite `.gitignore`, so dependencies are indexed entirely on demand. A query racing a filesystem rewrite or package installation may observe an intermediate state; the next query reconciles the scope again.
 
 Currently supported languages: JavaScript, TypeScript/TSX, Python, and Rust.
-
-## Storage
-
-No source-path configuration is required. The socket and database live under `~/.pi/agent/extensions/trace/`. The environment variables `TRACE_SOCKET` and `TRACE_DB` override their locations for tests and development daemons.
-
-## Running with systemd
-
-Install the service:
-
-```sh
-mkdir -p ~/.config/systemd/user
-cp systemd/traced.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now traced.service
-```
-
-Check the service directly:
-
-```sh
-systemctl --user status traced.service
-journalctl --user -u traced.service
-```
-
-The service deliberately has no restart loop or compatibility mode. Startup failures remain failed until corrected.
 
 ## Development
 
@@ -62,13 +33,7 @@ pnpm test
 pnpm format:check
 ```
 
-Run the daemon against the default persistent cache:
-
-```sh
-pnpm traced
-```
-
-Then, in another terminal, load the extension:
+Load the extension:
 
 ```sh
 pnpm exec pi -e .

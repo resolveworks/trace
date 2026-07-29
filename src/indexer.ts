@@ -20,12 +20,13 @@ let parser: Parser | null = null;
 
 /** Initialize the parser after the WASM runtime and grammars are ready. */
 export async function initializeIndexer(): Promise<void> {
+  if (parser) throw new Error("tree-sitter indexer is already initialized");
   await initializeLanguages();
-  parser ??= new Parser();
+  parser = new Parser();
 }
 
 export function closeIndexer(): void {
-  parser?.delete();
+  getParser().delete();
   parser = null;
 }
 

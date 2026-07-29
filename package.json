@@ -26,8 +26,7 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*"
+    "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.82.0",
@@ -41,7 +40,6 @@
   },
   "scripts": {
     "test": "node tests/test.ts",
-    "traced": "node src/daemon.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
