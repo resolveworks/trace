@@ -56,7 +56,7 @@ function renderTreeMarkdown(
   const lines: string[] = [];
   for (const symbol of tree.get(parentId) ?? []) {
     lines.push(
-      `${indent}- ${inlineCode(symbol.name)} — ${inlineCode(symbol.node_type)}, lines ${symbol.start_line}–${symbol.end_line}`,
+      `${indent}- ${inlineCode(symbol.name)} (${inlineCode(symbol.node_type)}), L${symbol.start_line}${symbol.start_line === symbol.end_line ? "" : `–${symbol.end_line}`}`,
     );
     lines.push(...renderTreeMarkdown(tree, symbol.id, indent + "  "));
   }
@@ -241,9 +241,9 @@ export function registerTrace(pi: ExtensionAPI, database: string) {
           lines = fs.readFileSync(call.file, "utf-8").split("\n");
           fileCache.set(call.file, lines);
         }
-        const location = `${displayPath(ctx.cwd, call.file)}:${call.line}-${call.end_line}`;
+        const location = `${displayPath(ctx.cwd, call.file)}:L${call.line}${call.line === call.end_line ? "" : `–${call.end_line}`}`;
         const title = call.caller_name
-          ? `Called in ${inlineCode(call.caller_name)} — ${inlineCode(call.caller_node_type ?? "unknown")}, ${inlineCode(location)}`
+          ? `Called in ${inlineCode(call.caller_name)} (${inlineCode(call.caller_node_type ?? "unknown")}), ${inlineCode(location)}`
           : `Called at top level, ${inlineCode(location)}`;
         const source = lines.slice(call.line - 1, call.end_line).join("\n");
         return [`## ${title}`, sourceBlock(call.file, source)].join("\n\n");

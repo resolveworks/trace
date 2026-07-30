@@ -103,9 +103,9 @@ function callerTitle(
   name?: string,
   nodeType?: string,
 ): string {
-  const location = `\`${displayPath(cwd, file)}:${line}-${endLine}\``;
+  const location = `\`${displayPath(cwd, file)}:L${line}${line === endLine ? "" : `–${endLine}`}\``;
   return name
-    ? `## Called in \`${name}\` — \`${nodeType}\`, ${location}`
+    ? `## Called in \`${name}\` (\`${nodeType}\`), ${location}`
     : `## Called at top level, ${location}`;
 }
 
@@ -344,9 +344,9 @@ try {
       [
         `## Symbols in \`${displayPath(projectB, source)}\``,
         "",
-        "- `target` — `function_declaration`, lines 1–3",
-        "- `Counter` — `class_declaration`, lines 5–9",
-        "  - `increment` — `method_definition`, lines 6–8",
+        "- `target` (`function_declaration`), L1–3",
+        "- `Counter` (`class_declaration`), L5–9",
+        "  - `increment` (`method_definition`), L6–8",
       ].join("\n"),
     "outline accepts an absolute directory and renders nested symbols",
   );
@@ -364,9 +364,9 @@ try {
   assert(
     javascriptOutline ===
       [
-        "- `Client` — `class_declaration`, lines 1–3",
-        "  - `run` — `method_definition`, lines 2–2",
-        "- `build` — `variable_declarator`, lines 4–4",
+        "- `Client` (`class_declaration`), L1–3",
+        "  - `run` (`method_definition`), L2",
+        "- `build` (`variable_declarator`), L4",
       ].join("\n") &&
       javascriptMemberCallers.includes(
         callerTitle(projectA, javascriptContract, 2, 2, "run", "method_definition"),
@@ -383,19 +383,19 @@ try {
   assert(
     typescriptOutline ===
       [
-        "- `Service` — `interface_declaration`, lines 1–3",
-        "  - `run` — `method_signature`, lines 2–2",
-        "- `Compact` — `interface_declaration`, lines 4–4",
-        "  - `ping` — `method_signature`, lines 4–4",
-        "  - `ping` — `method_signature`, lines 4–4",
-        "- `Input` — `type_alias_declaration`, lines 5–5",
-        "- `Output` — `type_alias_declaration`, lines 6–6",
-        "- `create` — `function_signature`, lines 7–7",
-        "- `API` — `internal_module`, lines 8–10",
-        "  - `declared` — `function_signature`, lines 9–9",
-        "- `Widget` — `class_declaration`, lines 11–11",
-        "- `build` — `function_declaration`, lines 12–16",
-        "- `sameLine` — `function_declaration`, lines 17–17",
+        "- `Service` (`interface_declaration`), L1–3",
+        "  - `run` (`method_signature`), L2",
+        "- `Compact` (`interface_declaration`), L4",
+        "  - `ping` (`method_signature`), L4",
+        "  - `ping` (`method_signature`), L4",
+        "- `Input` (`type_alias_declaration`), L5",
+        "- `Output` (`type_alias_declaration`), L6",
+        "- `create` (`function_signature`), L7",
+        "- `API` (`internal_module`), L8–10",
+        "  - `declared` (`function_signature`), L9",
+        "- `Widget` (`class_declaration`), L11",
+        "- `build` (`function_declaration`), L12–16",
+        "- `sameLine` (`function_declaration`), L17",
       ].join("\n"),
     "TypeScript interfaces, signatures, types, modules, classes, and functions are outlined",
   );
@@ -462,9 +462,9 @@ try {
   assert(
     pythonOutline ===
       [
-        "- `Worker` — `class_definition`, lines 1–4",
-        "  - `work` — `function_definition`, lines 2–4",
-        "- `helper` — `function_definition`, lines 6–7",
+        "- `Worker` (`class_definition`), L1–4",
+        "  - `work` (`function_definition`), L2–4",
+        "- `helper` (`function_definition`), L6–7",
       ].join("\n") &&
       pythonHelperCallers.includes(
         callerTitle(projectA, pythonContract, 3, 3, "work", "function_definition"),
@@ -491,15 +491,15 @@ try {
   assert(
     rustOutline ===
       [
-        "- `Engine` — `struct_item`, lines 1–1",
-        "- `Mode` — `enum_item`, lines 2–2",
-        "- `Value` — `union_item`, lines 3–3",
-        "- `EngineAlias` — `type_item`, lines 4–4",
-        "- `Runner` — `trait_item`, lines 5–5",
-        "- `support` — `mod_item`, lines 6–6",
-        "- `local_macro` — `macro_definition`, lines 7–7",
-        "- `execute` — `function_item`, lines 10–14",
-        "- `helper` — `function_item`, lines 17–17",
+        "- `Engine` (`struct_item`), L1",
+        "- `Mode` (`enum_item`), L2",
+        "- `Value` (`union_item`), L3",
+        "- `EngineAlias` (`type_item`), L4",
+        "- `Runner` (`trait_item`), L5",
+        "- `support` (`mod_item`), L6",
+        "- `local_macro` (`macro_definition`), L7",
+        "- `execute` (`function_item`), L10–14",
+        "- `helper` (`function_item`), L17",
       ].join("\n") &&
       rustHelperCallers.includes(
         callerTitle(projectA, rustContract, 11, 11, "execute", "function_item"),
