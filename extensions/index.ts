@@ -1,11 +1,19 @@
+import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
+import { writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
+  formatSize,
   truncateHead,
+  withFileMutationQueue,
+  type AgentToolResult,
   type ExtensionAPI,
+  type Theme,
+  type ToolRenderResultOptions,
+  type TruncationResult,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -50,10 +58,66 @@ function resolveScope(cwd: string, input?: string): string {
   return path.resolve(cwd, input ?? ".");
 }
 
-function truncate(text: string): string {
-  const result = truncateHead(text, { maxBytes: DEFAULT_MAX_BYTES, maxLines: DEFAULT_MAX_LINES });
-  if (!result.truncated) return result.content;
-  return `${result.content}\n\n[Output truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES} bytes. Narrow the path scope.]`;
+interface TruncatedOutput {
+  content: string;
+  truncation?: TruncationResult;
+  fullOutputPath?: string;
+}
+
+interface TraceResultDetails {
+  truncation?: TruncationResult;
+  fullOutputPath?: string;
+}
+
+async function saveFullOutput(content: string): Promise<string> {
+  const id = randomBytes(8).toString("hex");
+  const fullOutputPath = path.join(os.tmpdir(), `pi-trace-${id}.md`);
+  await withFileMutationQueue(fullOutputPath, () => writeFile(fullOutputPath, content, "utf-8"));
+  return fullOutputPath;
+}
+
+function truncationNotice(truncation: TruncationResult, fullOutputPath: string): string {
+  const truncated =
+    truncation.truncatedBy === "lines"
+      ? `Truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines`
+      : `Truncated: ${truncation.outputLines} lines shown (${formatSize(truncation.maxBytes)} limit)`;
+  return `[Full output: ${fullOutputPath}. ${truncated}]`;
+}
+
+async function truncate(text: string): Promise<TruncatedOutput> {
+  const truncation = truncateHead(text, {
+    maxBytes: DEFAULT_MAX_BYTES,
+    maxLines: DEFAULT_MAX_LINES,
+  });
+  if (!truncation.truncated) return { content: truncation.content };
+
+  const fullOutputPath = await saveFullOutput(text);
+  return {
+    content: `${truncation.content}\n\n${truncationNotice(truncation, fullOutputPath)}`,
+    truncation,
+    fullOutputPath,
+  };
+}
+
+function renderTraceResult(
+  result: AgentToolResult<unknown>,
+  _options: ToolRenderResultOptions,
+  theme: Theme,
+): Text {
+  const details = result.details as TraceResultDetails | undefined;
+  const footer =
+    details?.truncation?.truncated && details.fullOutputPath
+      ? truncationNotice(details.truncation, details.fullOutputPath)
+      : undefined;
+  let content = result.content
+    .filter((item) => item.type === "text")
+    .map((item) => item.text ?? "")
+    .join("\n");
+  if (footer && content.endsWith(footer)) content = content.slice(0, -footer.length).trimEnd();
+
+  const output = content ? theme.fg("toolOutput", content) : "";
+  const warning = footer ? theme.fg("warning", footer) : "";
+  return new Text([output, warning].filter(Boolean).join("\n\n"), 0, 0);
 }
 
 function pathParameter() {
@@ -122,11 +186,17 @@ export function registerTrace(pi: ExtensionAPI, database: string) {
           .join("\n");
         return `${label}\n${body}`;
       });
+      const output = await truncate([header, ...blocks].join("\n\n"));
       return {
-        content: [{ type: "text" as const, text: truncate([header, ...blocks].join("\n\n")) }],
-        details: { definitions },
+        content: [{ type: "text" as const, text: output.content }],
+        details: {
+          definitions,
+          truncation: output.truncation,
+          fullOutputPath: output.fullOutputPath,
+        },
       };
     },
+    renderResult: renderTraceResult,
   });
 
   pi.registerTool({
@@ -175,11 +245,13 @@ export function registerTrace(pi: ExtensionAPI, database: string) {
           .join("\n");
         return `${label}\n${source}`;
       });
+      const output = await truncate(blocks.join("\n\n"));
       return {
-        content: [{ type: "text" as const, text: truncate(blocks.join("\n\n")) }],
-        details: { callers },
+        content: [{ type: "text" as const, text: output.content }],
+        details: { callers, truncation: output.truncation, fullOutputPath: output.fullOutputPath },
       };
     },
+    renderResult: renderTraceResult,
   });
 
   pi.registerTool({
@@ -223,11 +295,13 @@ export function registerTrace(pi: ExtensionAPI, database: string) {
           lines.push(...renderTreeLines(buildSymbolTree(symbols), null, "  "));
         }
       }
+      const output = await truncate(lines.join("\n"));
       return {
-        content: [{ type: "text" as const, text: truncate(lines.join("\n")) }],
-        details: { symbols },
+        content: [{ type: "text" as const, text: output.content }],
+        details: { symbols, truncation: output.truncation, fullOutputPath: output.fullOutputPath },
       };
     },
+    renderResult: renderTraceResult,
   });
 }
 

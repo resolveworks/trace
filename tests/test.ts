@@ -638,6 +638,34 @@ try {
     "an empty directory is a valid scope",
   );
 
+  console.log("\nTool output truncation...");
+  const hugeSource = write(
+    projectA,
+    "huge.ts",
+    [
+      "export function huge() {",
+      ...Array.from({ length: 2_100 }, (_, index) => `  console.log(${index});`),
+      "}",
+      "",
+    ].join("\n"),
+  );
+  const hugeDefinition = await executeTool("def", { name: "huge", path: hugeSource }, projectA);
+  const hugeDetails = hugeDefinition.details as {
+    truncation?: { truncated: boolean };
+    fullOutputPath?: string;
+  };
+  const hugeOutputPath = hugeDetails.fullOutputPath;
+  assert(
+    hugeDetails.truncation?.truncated === true &&
+      typeof hugeOutputPath === "string" &&
+      path.dirname(hugeOutputPath) === os.tmpdir() &&
+      /^pi-trace-[0-9a-f]{16}\.md$/.test(path.basename(hugeOutputPath)) &&
+      resultText(hugeDefinition).includes(`Full output: ${hugeOutputPath}`) &&
+      fs.readFileSync(hugeOutputPath, "utf-8").includes("2102 | }"),
+    "truncated output is persisted to a temp file and reports its path",
+  );
+  if (hugeOutputPath) fs.rmSync(hugeOutputPath, { force: true });
+
   console.log("\n.gitignore lifecycle...");
   const gitignore = path.join(projectA, ".gitignore");
   const originalGitignore = fs.readFileSync(gitignore, "utf-8");
