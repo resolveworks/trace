@@ -87,6 +87,28 @@ function resultText(result: AgentToolResult<unknown>): string {
     .join("\n");
 }
 
+function displayPath(cwd: string, file: string): string {
+  return path.relative(cwd, file) || ".";
+}
+
+function definitionTitle(cwd: string, file: string, startLine: number, endLine: number): string {
+  return `## Defined in \`${displayPath(cwd, file)}:${startLine}–${endLine}\``;
+}
+
+function callerTitle(
+  cwd: string,
+  file: string,
+  line: number,
+  endLine: number,
+  name?: string,
+  nodeType?: string,
+): string {
+  const location = `\`${displayPath(cwd, file)}:${line}-${endLine}\``;
+  return name
+    ? `## Called in \`${name}\` — \`${nodeType}\`, ${location}`
+    : `## Called at top level, ${location}`;
+}
+
 fs.mkdirSync(projectA, { recursive: true });
 fs.mkdirSync(projectB, { recursive: true });
 const source = write(
@@ -259,12 +281,13 @@ try {
   console.log("Core tool contract...");
   const definition = await executeTool("def", { name: "target" }, projectA);
   const expectedDefinition = [
-    '1 definition of "target":',
+    definitionTitle(projectA, source, 1, 3),
     "",
-    `function_declaration target in ${source}:1-3`,
-    "   1 | export function target(value: number): number {",
-    "   2 |   return value + 1;",
-    "   3 | }",
+    "```typescript",
+    "export function target(value: number): number {",
+    "  return value + 1;",
+    "}",
+    "```",
   ].join("\n");
   assert(
     resultText(definition) === expectedDefinition &&
@@ -278,16 +301,15 @@ try {
     projectA,
   );
   assert(
-    resultText(linkedDefinition).includes(
-      `function_declaration linkedSymbol in ${sourceSymlink}:1`,
-    ) && !resultText(linkedDefinition).includes(linkedSource),
+    resultText(linkedDefinition).includes(definitionTitle(projectA, sourceSymlink, 1, 1)) &&
+      !resultText(linkedDefinition).includes(linkedSource),
     "a file symlink scope is indexed through its logical path",
   );
 
   const directoryLinkedDefinition = await executeTool("def", { name: "linkedSymbol" }, projectA);
   assert(
     resultText(directoryLinkedDefinition).includes(
-      `function_declaration linkedSymbol in ${sourceSymlink}:1`,
+      definitionTitle(projectA, sourceSymlink, 1, 1),
     ) && !resultText(directoryLinkedDefinition).includes(linkedSource),
     "directory reconciliation includes file symlinks",
   );
@@ -298,7 +320,7 @@ try {
     projectA,
   );
   assert(
-    resultText(cycleDefinition).includes(`in ${cycleNeighbor}:1`) &&
+    resultText(cycleDefinition).includes(definitionTitle(projectA, cycleNeighbor, 1, 1)) &&
       !resultText(cycleDefinition).includes(`${path.sep}back${path.sep}`),
     "an ancestor symlink cycle terminates without suppressing neighboring files",
   );
@@ -306,7 +328,13 @@ try {
   const callers = await executeTool("callers", { name: "target", path: "src/a.ts" }, projectA);
   assert(
     resultText(callers) ===
-      `${source}:7 — called in increment (method_definition)\n   7 |     return target(value);`,
+      [
+        callerTitle(projectA, source, 7, 7, "increment", "method_definition"),
+        "",
+        "```typescript",
+        "    return target(value);",
+        "```",
+      ].join("\n"),
     "callers resolves a relative path and reports source context",
   );
 
@@ -314,10 +342,11 @@ try {
   assert(
     resultText(outline) ===
       [
-        `${source}:`,
-        "  target (function_declaration) — 1-3",
-        "  Counter (class_declaration) — 5-9",
-        "    increment (method_definition) — 6-8",
+        `## Symbols in \`${displayPath(projectB, source)}\``,
+        "",
+        "- `target` — `function_declaration`, lines 1–3",
+        "- `Counter` — `class_declaration`, lines 5–9",
+        "  - `increment` — `method_definition`, lines 6–8",
       ].join("\n"),
     "outline accepts an absolute directory and renders nested symbols",
   );
@@ -335,12 +364,16 @@ try {
   assert(
     javascriptOutline ===
       [
-        "Client (class_declaration) — 1-3",
-        "  run (method_definition) — 2-2",
-        "build (variable_declarator) — 4-4",
+        "- `Client` — `class_declaration`, lines 1–3",
+        "  - `run` — `method_definition`, lines 2–2",
+        "- `build` — `variable_declarator`, lines 4–4",
       ].join("\n") &&
-      javascriptMemberCallers.includes("called in run (method_definition)") &&
-      javascriptConstructorCallers.includes("called in build (variable_declarator)"),
+      javascriptMemberCallers.includes(
+        callerTitle(projectA, javascriptContract, 2, 2, "run", "method_definition"),
+      ) &&
+      javascriptConstructorCallers.includes(
+        callerTitle(projectA, javascriptContract, 4, 4, "build", "variable_declarator"),
+      ),
     "JavaScript definitions, methods, member calls, and constructors are extracted",
   );
 
@@ -350,19 +383,19 @@ try {
   assert(
     typescriptOutline ===
       [
-        "Service (interface_declaration) — 1-3",
-        "  run (method_signature) — 2-2",
-        "Compact (interface_declaration) — 4-4",
-        "  ping (method_signature) — 4-4",
-        "  ping (method_signature) — 4-4",
-        "Input (type_alias_declaration) — 5-5",
-        "Output (type_alias_declaration) — 6-6",
-        "create (function_signature) — 7-7",
-        "API (internal_module) — 8-10",
-        "  declared (function_signature) — 9-9",
-        "Widget (class_declaration) — 11-11",
-        "build (function_declaration) — 12-16",
-        "sameLine (function_declaration) — 17-17",
+        "- `Service` — `interface_declaration`, lines 1–3",
+        "  - `run` — `method_signature`, lines 2–2",
+        "- `Compact` — `interface_declaration`, lines 4–4",
+        "  - `ping` — `method_signature`, lines 4–4",
+        "  - `ping` — `method_signature`, lines 4–4",
+        "- `Input` — `type_alias_declaration`, lines 5–5",
+        "- `Output` — `type_alias_declaration`, lines 6–6",
+        "- `create` — `function_signature`, lines 7–7",
+        "- `API` — `internal_module`, lines 8–10",
+        "  - `declared` — `function_signature`, lines 9–9",
+        "- `Widget` — `class_declaration`, lines 11–11",
+        "- `build` — `function_declaration`, lines 12–16",
+        "- `sameLine` — `function_declaration`, lines 17–17",
       ].join("\n"),
     "TypeScript interfaces, signatures, types, modules, classes, and functions are outlined",
   );
@@ -370,8 +403,10 @@ try {
     await executeTool("callers", { name: "Widget", path: typescriptContract }, projectA),
   );
   assert(
-    (widgetCallers.match(/called in/g) ?? []).length === 1 &&
-      widgetCallers.includes(`${typescriptContract}:13 — called in build (function_declaration)`) &&
+    (widgetCallers.match(/Called in/g) ?? []).length === 1 &&
+      widgetCallers.includes(
+        callerTitle(projectA, typescriptContract, 13, 13, "build", "function_declaration"),
+      ) &&
       widgetCallers.includes("new Widget()"),
     "constructors are callers while TypeScript annotations are not",
   );
@@ -381,7 +416,8 @@ try {
     projectA,
   );
   assert(
-    resultText(inputCallers) === 'No callers found for "Input"',
+    resultText(inputCallers) ===
+      `No callers named \`Input\` found under \`${displayPath(projectA, typescriptContract)}\`.`,
     "TypeScript type references are not callers",
   );
   const nestedCallers = resultText(
@@ -391,8 +427,9 @@ try {
     await executeTool("callers", { name: "topLevel", path: typescriptContract }, projectA),
   );
   assert(
-    nestedCallers.includes("called in sameLine (function_declaration)") &&
-      topLevelCallers.includes("called in (top-level)"),
+    nestedCallers.includes(
+      callerTitle(projectA, typescriptContract, 17, 17, "sameLine", "function_declaration"),
+    ) && topLevelCallers.includes(callerTitle(projectA, typescriptContract, 17, 17)),
     "same-line calls are assigned by syntax boundaries rather than line range",
   );
 
@@ -405,10 +442,11 @@ try {
     projectA,
   );
   assert(
-    (tsxButtonCallers.match(/called in/g) ?? []).length === 2 &&
+    (tsxButtonCallers.match(/Called in/g) ?? []).length === 2 &&
       tsxButtonCallers.includes("<Button />") &&
       tsxButtonCallers.includes("<UI.Button>") &&
-      resultText(intrinsicCallers) === 'No callers found for "button"',
+      resultText(intrinsicCallers) ===
+        `No callers named \`button\` found under \`${displayPath(projectA, tsxContract)}\`.`,
     "TSX components include simple and member tags without closers or intrinsic tags",
   );
 
@@ -424,11 +462,13 @@ try {
   assert(
     pythonOutline ===
       [
-        "Worker (class_definition) — 1-4",
-        "  work (function_definition) — 2-4",
-        "helper (function_definition) — 6-7",
+        "- `Worker` — `class_definition`, lines 1–4",
+        "  - `work` — `function_definition`, lines 2–4",
+        "- `helper` — `function_definition`, lines 6–7",
       ].join("\n") &&
-      pythonHelperCallers.includes("called in work (function_definition)") &&
+      pythonHelperCallers.includes(
+        callerTitle(projectA, pythonContract, 3, 3, "work", "function_definition"),
+      ) &&
       pythonMemberCallers.includes("self.finish()"),
     "Python classes, functions, and direct and member calls are extracted",
   );
@@ -451,20 +491,23 @@ try {
   assert(
     rustOutline ===
       [
-        "Engine (struct_item) — 1-1",
-        "Mode (enum_item) — 2-2",
-        "Value (union_item) — 3-3",
-        "EngineAlias (type_item) — 4-4",
-        "Runner (trait_item) — 5-5",
-        "support (mod_item) — 6-6",
-        "local_macro (macro_definition) — 7-7",
-        "execute (function_item) — 10-14",
-        "helper (function_item) — 17-17",
+        "- `Engine` — `struct_item`, lines 1–1",
+        "- `Mode` — `enum_item`, lines 2–2",
+        "- `Value` — `union_item`, lines 3–3",
+        "- `EngineAlias` — `type_item`, lines 4–4",
+        "- `Runner` — `trait_item`, lines 5–5",
+        "- `support` — `mod_item`, lines 6–6",
+        "- `local_macro` — `macro_definition`, lines 7–7",
+        "- `execute` — `function_item`, lines 10–14",
+        "- `helper` — `function_item`, lines 17–17",
       ].join("\n") &&
-      rustHelperCallers.includes("called in execute (function_item)") &&
+      rustHelperCallers.includes(
+        callerTitle(projectA, rustContract, 11, 11, "execute", "function_item"),
+      ) &&
       rustMemberCallers.includes("self.finish()") &&
       rustMacroCallers.includes('println!("running")') &&
-      resultText(rustImplCallers) === 'No callers found for "Runner"',
+      resultText(rustImplCallers) ===
+        `No callers named \`Runner\` found under \`${displayPath(projectA, rustContract)}\`.`,
     "Rust types, functions, methods, macros, and calls exclude impl references",
   );
 
@@ -475,9 +518,8 @@ try {
     projectA,
   );
   assert(
-    resultText(dependencyDefinition).includes(
-      `function_declaration dependencyValue in ${dependencyLogical}:1-3`,
-    ) && !resultText(dependencyDefinition).includes(dependencyPhysical),
+    resultText(dependencyDefinition).includes(definitionTitle(projectA, dependencyLogical, 1, 3)) &&
+      !resultText(dependencyDefinition).includes(dependencyPhysical),
     "a pnpm package is indexed and reported through its logical symlink path",
   );
 
@@ -488,7 +530,7 @@ try {
   );
   assert(
     !resultText(dependencyDefinition).includes(dependencyAlias) &&
-      resultText(aliasDefinition).includes(`in ${dependencyAlias}:1-3`) &&
+      resultText(aliasDefinition).includes(definitionTitle(projectA, dependencyAlias, 1, 3)) &&
       !resultText(aliasDefinition).includes(dependencyLogical),
     "two directory aliases to one package remain independently queryable",
   );
@@ -499,7 +541,7 @@ try {
     projectA,
   );
   assert(
-    resultText(venvDefinition).includes(`function_definition environment_value in ${venvModule}`),
+    resultText(venvDefinition).includes(definitionTitle(projectA, venvModule, 1, 2)),
     "a gitignored virtual environment remains indexable",
   );
 
@@ -514,10 +556,12 @@ try {
     projectA,
   );
   assert(
-    resultText(projectSharedDefinition).includes(`in ${sharedSource}:1`) &&
+    resultText(projectSharedDefinition).includes(definitionTitle(projectA, sharedSource, 1, 1)) &&
       !resultText(projectSharedDefinition).includes(dependencyLogical) &&
       (projectSharedDefinition.details as { definitions: unknown[] }).definitions.length === 1 &&
-      resultText(dependencySharedDefinition).includes(`in ${dependencyLogical}:5-7`) &&
+      resultText(dependencySharedDefinition).includes(
+        definitionTitle(projectA, dependencyLogical, 5, 7),
+      ) &&
       !resultText(dependencySharedDefinition).includes(sharedSource),
     "project and dependency scopes partition definitions",
   );
@@ -528,13 +572,16 @@ try {
     projectA,
   );
   assert(
-    resultText(projectSharedCallers) === 'No callers found for "sharedEnvironmentValue"',
+    resultText(projectSharedCallers) ===
+      "No callers named `sharedEnvironmentValue` found under `.`.",
     "project-scoped callers exclude call sites in dependency environments",
   );
 
   const projectOutline = await executeTool("outline", {}, projectA);
   assert(
-    resultText(projectOutline).includes(`${sharedSource}:`) &&
+    resultText(projectOutline).includes(
+      `## Symbols in \`${displayPath(projectA, sharedSource)}\``,
+    ) &&
       !resultText(projectOutline).includes(dependencyLogical) &&
       !resultText(projectOutline).includes(venvModule),
     "project-scoped outlines exclude dependency environment files",
@@ -548,8 +595,9 @@ try {
     projectA,
   );
   assert(
-    resultText(refreshedLinkedDefinition).includes(`in ${sourceSymlink}:1-3`) &&
-      resultText(refreshedLinkedDefinition).includes("   2 |   return 2;"),
+    resultText(refreshedLinkedDefinition).includes(
+      definitionTitle(projectA, sourceSymlink, 1, 3),
+    ) && resultText(refreshedLinkedDefinition).includes("  return 2;"),
     "a file symlink scope reconciles changes to its target",
   );
 
@@ -584,15 +632,15 @@ try {
   );
   const nestedSymbol = await executeTool("def", { name: "nestedSymbol" }, projectA);
   assert(
-    resultText(nestedSymbol).includes("function_declaration nestedSymbol"),
+    resultText(nestedSymbol).includes("export function nestedSymbol"),
     "a file added in a nested directory is indexed",
   );
   fs.writeFileSync(nestedFile, "export function renamedNestedSymbol() {}\n");
   const removedNestedSymbol = await executeTool("def", { name: "nestedSymbol" }, projectA);
   const renamedNestedSymbol = await executeTool("def", { name: "renamedNestedSymbol" }, projectA);
   assert(
-    resultText(removedNestedSymbol) === 'No definition found for "nestedSymbol"' &&
-      resultText(renamedNestedSymbol).includes("function_declaration renamedNestedSymbol"),
+    resultText(removedNestedSymbol) === "No definitions named `nestedSymbol` found under `.`." &&
+      resultText(renamedNestedSymbol).includes("export function renamedNestedSymbol"),
     "a change in a nested directory is reconciled",
   );
   fs.unlinkSync(nestedFile);
@@ -602,14 +650,15 @@ try {
     projectA,
   );
   assert(
-    resultText(removedRenamedNestedSymbol) === 'No definition found for "renamedNestedSymbol"',
+    resultText(removedRenamedNestedSymbol) ===
+      "No definitions named `renamedNestedSymbol` found under `.`.",
     "a deletion in a nested directory is removed",
   );
 
   console.log("\nScope and failure contract...");
   const emptyOutline = await executeTool("outline", { path: empty }, projectA);
   assert(
-    resultText(emptyOutline) === `No symbols found in "${empty}"`,
+    resultText(emptyOutline) === `No symbols found under \`${displayPath(projectA, empty)}\`.`,
     "an indexed file may have no symbols",
   );
   await rejects(
@@ -628,13 +677,14 @@ try {
     projectA,
   );
   assert(
-    resultText(externalDefinition).includes(`in ${externalSource}:1`),
+    resultText(externalDefinition).includes(definitionTitle(projectA, externalSource, 1, 1)),
     "an arbitrary absolute file scope is searchable",
   );
 
   const emptyDirectoryOutline = await executeTool("outline", { path: emptyDirectory }, projectA);
   assert(
-    resultText(emptyDirectoryOutline) === `No symbols found in "${emptyDirectory}"`,
+    resultText(emptyDirectoryOutline) ===
+      `No symbols found under \`${displayPath(projectA, emptyDirectory)}\`.`,
     "an empty directory is a valid scope",
   );
 
@@ -660,8 +710,9 @@ try {
       typeof hugeOutputPath === "string" &&
       path.dirname(hugeOutputPath) === os.tmpdir() &&
       /^pi-trace-[0-9a-f]{16}\.md$/.test(path.basename(hugeOutputPath)) &&
-      resultText(hugeDefinition).includes(`Full output: ${hugeOutputPath}`) &&
-      fs.readFileSync(hugeOutputPath, "utf-8").includes("2102 | }"),
+      resultText(hugeDefinition).includes(`Full output: \`${hugeOutputPath}\``) &&
+      fs.readFileSync(hugeOutputPath, "utf-8").includes("  console.log(2099);") &&
+      fs.readFileSync(hugeOutputPath, "utf-8").endsWith("}\n```"),
     "truncated output is persisted to a temp file and reports its path",
   );
   if (hugeOutputPath) fs.rmSync(hugeOutputPath, { force: true });
@@ -672,13 +723,13 @@ try {
   fs.writeFileSync(gitignore, originalGitignore.replace("ignored.ts\n", ""));
   const unignoredSymbol = await executeTool("def", { name: "ignoredSymbol" }, projectA);
   assert(
-    resultText(unignoredSymbol).includes("function_declaration ignoredSymbol"),
+    resultText(unignoredSymbol).includes("export function ignoredSymbol"),
     "a newly unignored file appears in the index",
   );
   fs.writeFileSync(gitignore, originalGitignore);
   const reignoredSymbol = await executeTool("def", { name: "ignoredSymbol" }, projectA);
   assert(
-    resultText(reignoredSymbol) === 'No definition found for "ignoredSymbol"',
+    resultText(reignoredSymbol) === "No definitions named `ignoredSymbol` found under `.`.",
     "restoring the .gitignore re-ignores its files",
   );
 } finally {
